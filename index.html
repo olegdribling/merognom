@@ -1,49 +1,45 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Metronome</title>
+  <title>Metronome PWA</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  <!-- Tailwind CSS -->
+  <!-- Tailwind -->
   <script src="https://cdn.tailwindcss.com"></script>
 
-  <!-- React & ReactDOM -->
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <!-- React UMD -->
+  <script crossorigin src="https://unpkg.com/react@17/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@17/umd/react-dom.development.js"></script>
 
-  <!-- Firebase -->
+  <!-- Babel — обязательно ПЕРЕД app.js -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- ✅ Firebase SDK (compat) -->
   <script src="https://www.gstatic.com/firebasejs/12.4.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/12.4.0/firebase-auth-compat.js"></script>
 
-  <!-- Firebase Init -->
   <script>
-    const firebaseConfig = {
+    // ✅ Firebase INIT
+    firebase.initializeApp({
       apiKey: "AIzaSyAIkVU7ffXV4T_dv0F0AUp7hbcmS_nX9eA",
       authDomain: "metrognom-7503e.firebaseapp.com",
       projectId: "metrognom-7503e",
       storageBucket: "metrognom-7503e.firebasestorage.app",
       messagingSenderId: "737101311773",
       appId: "1:737101311773:web:f1d5ad2b58f5a46ae9fbf4"
-    };
+    });
 
-    firebase.initializeApp(firebaseConfig);
-    const db = firebase.firestore();
-    const auth = firebase.auth();
+    // Глобально доступная Firestore
+    window.db = firebase.firestore();
+    window.serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
   </script>
-
-  <!-- Babel -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/6.26.0/babel.min.js"></script>
-
-  <style>
-    .glass { background: rgba(255,255,255,0.05); backdrop-filter: blur(15px); }
-  </style>
 </head>
 
-<body class="bg-black">
+<body class="bg-gray-900">
   <div id="root"></div>
 
+  <!-- Наш основной код -->
   <script type="text/babel" src="app.js"></script>
 </body>
 </html>
