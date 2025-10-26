@@ -1,57 +1,45 @@
-// ✅ Metronome + Firebase Firestore (Realtime, Variant A: all can edit)
-// Требования: index.html уже содержит firebase-app-compat, firebase-firestore-compat, firebase-auth-compat
-// и инициализацию firebase.initializeApp(firebaseConfig); см. предыдущее сообщение.
-
+// ✅ FULL UPDATED FILE — Group code gate + realtime Firestore sync
 const { useState, useRef, useEffect } = React;
 
-// --- Firestore helpers ---
-const db = firebase.firestore();
-const auth = firebase.auth();
-
 function App() {
-  // ---------- Auth (анонимный вход, чтобы были права на запись/чтение) ----------
-  const [authReady, setAuthReady] = useState(false);
-  const [displayName, setDisplayName] = useState(() => {
-    // локально храним имя участника, для поля "updatedBy"
-    try {
-      return localStorage.getItem("metronome_display_name") || "";
-    } catch {
-      return "";
+  // ====== GROUP CODE GATE ======
+  const [bandCodeInput, setBandCodeInput] = useState("");
+  const [codeError, setCodeError] = useState("");
+  const [bandCode, setBandCode] = useState(() => localStorage.getItem("band_code") || "");
+
+  const CORRECT_CODE = "0000"; // <- общий код группы
+
+  const handleSubmitCode = () => {
+    if (bandCodeInput.trim() === CORRECT_CODE) {
+      localStorage.setItem("band_code", CORRECT_CODE);
+      setBandCode(CORRECT_CODE);
+      setCodeError("");
+    } else {
+      setCodeError("Неверный код. Попробуйте ещё раз.");
     }
+  };
+
+  const resetCode = () => {
+    localStorage.removeItem("band_code");
+    setBandCode("");
+    setBandCodeInput("");
+    setCodeError("");
+  };
+
+  // ====== SONGS STATE ======
+  const [songs, setSongs] = useState(() => {
+    const saved = localStorage.getItem('songs_final2');
+    return saved ? JSON.parse(saved) : [];
   });
 
-  useEffect(() => {
-    // Мягко: если не авторизован — входим анонимно
-    const unsub = auth.onAuthStateChanged(async (u) => {
-      if (!u) {
-        try {
-          await auth.signInAnonymously();
-        } catch (e) {
-          console.error("Anonymous auth error:", e);
-        }
-      }
-      setAuthReady(true);
-    });
-    return () => unsub();
-  }, []);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem("metronome_display_name", displayName || "");
-    } catch {}
-  }, [displayName]);
-
-  // ---------- Songs (из Firestore) ----------
-  const [songs, setSongs] = useState([]);         // [{id, name, sections, order, ...}]
-  const [currentSongId, setCurrentSongId] = useState(null);
+  const [currentSong, setCurrentSong] = useState(null);
   const [newSongName, setNewSongName] = useState("");
 
-  // форма Add Section (показывается по клику)
-  const [showAddForm, setShowAddForm] = useState(false);
-  const sectionTypes = ["INTRO", "VERSE", "PRECHORUS", "CHORUS", "POSTCHORUS", "BRIDGE", "SOLO", "OUTRO", "PAUSE"];
+  const sectionTypes = ["INTRO", "VERSE", "PRECHORUS", "CHORUS", "POSTCHORUS","BRIDGE", "SOLO", "OUTRO", "PAUSE"];
   const [newSection, setNewSection] = useState({ name: "VERSE", bars: 4, comment: "" });
 
-  // ---------- Metronome ----------
+  const [showAddForm, setShowAddForm] = useState(false);
+
   const [bpm, setBpm] = useState(120);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentBeat, setCurrentBeat] = useState(1);
@@ -65,198 +53,147 @@ function App() {
   const barRef = useRef(0);
   const currentSectionRef = useRef(null);
 
-  // ---------- Подписка на Firestore ----------
+  const totalBars = song => song ? song.sections.reduce((s, sec) => s + sec.bars, 0) : 0;
+
+  // ====== FIRESTORE REALTIME SYNC ======
+  // Слушатель облака (включается только при верном коде)
   useEffect(() => {
-    if (!authReady) return;
-    // Реальное время: слушаем всю коллекцию и сортируем по order
-    const unsub = db
-      .collection("songs")
-      .orderBy("order", "asc")
-      .onSnapshot((snap) => {
-        const list = [];
-        snap.forEach((doc) => {
-          const d = doc.data();
-          list.push({
-            id: doc.id,
-            name: d.name || "Untitled",
-            sections: Array.isArray(d.sections) ? d.sections : [],
-            order: typeof d.order === "number" ? d.order : Number.MAX_SAFE_INTEGER,
-            updatedAt: d.updatedAt || null,
-            updatedBy: d.updatedBy || "",
-            createdAt: d.createdAt || null,
-          });
-        });
-        setSongs(list);
-        // если выбрана песня — обновим ссылку на её объект
-        if (currentSongId) {
-          const exists = list.find((s) => s.id === currentSongId);
-          if (!exists) {
-            // песню удалили
-            stop();
-            setCurrentSongId(null);
-          }
+    if (bandCode !== CORRECT_CODE) return;
+    const docRef = db.collection("bands").doc(bandCode);
+
+    const unsub = docRef.onSnapshot((doc) => {
+      const data = doc.data();
+      if (data && Array.isArray(data.songs)) {
+        setSongs(data.songs);
+        localStorage.setItem("songs_final2", JSON.stringify(data.songs));
+        // если текущая песня пропала — сбросим выбор
+        if (currentSong && !data.songs.find(s => s.id === currentSong.id)) {
+          setCurrentSong(null);
         }
-      }, (err) => {
-        console.error("Firestore realtime error:", err);
-      });
+      } else {
+        // если документа ещё нет — создадим пустой
+        docRef.set({ songs: [], updatedAt: serverTimestamp() }).catch(() => {});
+      }
+    }, (err) => {
+      console.warn("Firestore listener error:", err);
+    });
 
     return () => unsub();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authReady]);
+  }, [bandCode]);
 
-  // текущая песня из списка
-  const currentSong = currentSongId ? songs.find((s) => s.id === currentSongId) : null;
+  // Сохранение в облако + локально
+  const save = async (updatedSongs, updated = currentSong) => {
+    setSongs(updatedSongs);
+    localStorage.setItem("songs_final2", JSON.stringify(updatedSongs));
 
-  // ---------- Вспомогательное ----------
-  const totalBars = (song) => song ? song.sections.reduce((sum, sec) => sum + (Number(sec.bars) || 0), 0) : 0;
-
-  const nowTs = () => Date.now();
-  const actor = () => displayName?.trim() || "anonymous";
-
-  // ---------- CRUD: Songs ----------
-  const createSong = async () => {
-    if (!newSongName.trim()) return;
-
-    // вычислим следующий order (в конец)
-    const nextOrder = songs.length > 0 ? (Math.max(...songs.map(s => s.order || 0)) + 1) : 0;
-
-    const doc = {
-      name: newSongName.trim(),
-      sections: [{ name: "1 2 3 4", bars: 2, intro: true }],
-      order: nextOrder,
-      createdAt: nowTs(),
-      updatedAt: nowTs(),
-      updatedBy: actor(),
-    };
-    try {
-      const ref = await db.collection("songs").add(doc);
-      setNewSongName("");
-      // автоматически открываем новую песню
-      stop();
-      setCurrentSongId(ref.id);
-      setCurrentBeat(1);
-      setCurrentBar(0);
-    } catch (e) {
-      console.error("Create song error:", e);
+    if (bandCode === CORRECT_CODE) {
+      try {
+        await db.collection("bands").doc(bandCode).set({
+          songs: updatedSongs,
+          updatedAt: serverTimestamp()
+        });
+      } catch (e) {
+        console.warn("Cloud save failed:", e);
+      }
     }
+
+    if (updated) {
+      setCurrentSong(updatedSongs.find(s => s.id === updated.id));
+    }
+  };
+
+  const createSong = () => {
+    if (!newSongName.trim()) return;
+    const song = {
+      id: Date.now(),
+      name: newSongName.trim(),
+      sections: [
+        { name: "1 2 3 4", bars: 2, intro: true }
+      ]
+    };
+    save([...songs, song]);
+    setNewSongName("");
   };
 
   const selectSong = (song) => {
     stop();
-    setCurrentSongId(song.id);
+    setCurrentSong(song);
     setCurrentBeat(1);
     setCurrentBar(0);
   };
 
-  const deleteSong = async (id) => {
-    try {
-      await db.collection("songs").doc(id).delete();
-      if (currentSongId === id) {
-        stop();
-        setCurrentSongId(null);
-      }
-    } catch (e) {
-      console.error("Delete song error:", e);
-    }
+  const deleteSong = (id) => {
+    const updated = songs.filter(s => s.id !== id);
+    save(updated, currentSong?.id === id ? null : currentSong);
   };
 
-  // Перестановка песен (Drag & Drop): сохраняем новые order индексы
+  const addSection = () => {
+    if (!currentSong) return;
+
+    const updated = songs.map(s =>
+      s.id === currentSong.id
+        ? { 
+            ...s, 
+            sections: [...s.sections, 
+              { ...newSection, bars: Math.max(1, newSection.bars), intro: false }
+            ] 
+          }
+        : s
+    );
+    save(updated);
+    setShowAddForm(false);
+    setNewSection({ name: "VERSE", bars: 4, comment: "" });
+  };
+
+  const removeSection = (i) => {
+    if (currentSong.sections[i].intro) return;
+    const updated = songs.map(s =>
+      s.id === currentSong.id
+        ? { ...s, sections: s.sections.filter((_, idx) => idx !== i) }
+        : s
+    );
+    save(updated);
+  };
+
+  // ✅ Drag songs reorder
   const dragSongFrom = useRef(null);
   const allow = (e) => e.preventDefault();
   const songDragStart = (i) => () => (dragSongFrom.current = i);
-  const songDrop = (to) => async (e) => {
+  const songDrop = (to) => (e) => {
     e.preventDefault();
     const from = dragSongFrom.current;
     if (from == null || from === to) return;
-
     const reordered = [...songs];
     const [moved] = reordered.splice(from, 1);
     reordered.splice(to, 0, moved);
-
-    // батч апдейт order = индекс
-    const batch = db.batch();
-    reordered.forEach((s, idx) => {
-      const ref = db.collection("songs").doc(s.id);
-      batch.update(ref, { order: idx, updatedAt: nowTs(), updatedBy: actor() });
-    });
-
-    try {
-      await batch.commit();
-    } catch (e) {
-      console.error("Reorder songs error:", e);
-    }
+    save(reordered);
     dragSongFrom.current = null;
   };
 
-  // ---------- Секции (массив внутри песни) ----------
-  const addSection = async () => {
-    if (!currentSong) return;
-    const newSec = {
-      ...newSection,
-      bars: Math.max(1, Number(newSection.bars) || 1),
-      intro: false,
-    };
-
-    const updatedSections = [...currentSong.sections, newSec];
-    try {
-      await db.collection("songs").doc(currentSong.id).update({
-        sections: updatedSections,
-        updatedAt: nowTs(),
-        updatedBy: actor(),
-      });
-      setShowAddForm(false);
-      setNewSection({ name: "VERSE", bars: 4, comment: "" });
-    } catch (e) {
-      console.error("Add section error:", e);
-    }
-  };
-
-  const removeSection = async (i) => {
-    if (!currentSong) return;
-    if (currentSong.sections[i]?.intro) return; // INTRO нельзя удалять
-
-    const updatedSections = currentSong.sections.filter((_, idx) => idx !== i);
-    try {
-      await db.collection("songs").doc(currentSong.id).update({
-        sections: updatedSections,
-        updatedAt: nowTs(),
-        updatedBy: actor(),
-      });
-    } catch (e) {
-      console.error("Remove section error:", e);
-    }
-  };
-
-  // Перестановка секций (Drag & Drop)
+  // ✅ Drag sections reorder
   const dragFrom = useRef(null);
   const sectionDragStart = (i) => () => {
-    if (!currentSong?.sections[i]?.intro) dragFrom.current = i;
+    if (!currentSong.sections[i].intro) dragFrom.current = i;
   };
-  const sectionDrop = (to) => async (e) => {
+  const sectionDrop = (to) => (e) => {
     e.preventDefault();
     const from = dragFrom.current;
-    if (from == null || from === to) return;
-    if (currentSong?.sections[to]?.intro) return;
-
-    const arr = [...(currentSong?.sections || [])];
-    const [moved] = arr.splice(from, 1);
-    arr.splice(to, 0, moved);
-
-    try {
-      await db.collection("songs").doc(currentSong.id).update({
-        sections: arr,
-        updatedAt: nowTs(),
-        updatedBy: actor(),
-      });
-    } catch (e) {
-      console.error("Reorder sections error:", e);
-    }
+    if (from == null || to === from) return;
+    if (currentSong.sections[to].intro) return;
+    const updated = songs.map(s => {
+      if (s.id !== currentSong.id) return s;
+      const arr = [...s.sections];
+      const [moved] = arr.splice(from, 1);
+      arr.splice(to, 0, moved);
+      return { ...s, sections: arr };
+    });
+    save(updated);
     dragFrom.current = null;
   };
 
-  // ---------- AUDIO ----------
+  // AUDIO
   const clickSound = (time, accent) => {
-    if (!audioContextRef.current) return;
     const osc = audioContextRef.current.createOscillator();
     const gain = audioContextRef.current.createGain();
     osc.connect(gain);
@@ -271,9 +208,6 @@ function App() {
   };
 
   const schedule = () => {
-    if (!audioContextRef.current) return;
-    if (!currentSong) return;
-
     const ct = audioContextRef.current.currentTime;
     while (nextNoteTimeRef.current < ct + 0.1) {
       clickSound(nextNoteTimeRef.current, beatRef.current === 1);
@@ -291,30 +225,20 @@ function App() {
           setCurrentBar(0);
           return;
         }
-      } else {
-        beatRef.current += 1;
-      }
+      } else beatRef.current += 1;
     }
     timerRef.current = setTimeout(schedule, 25);
   };
 
   const start = () => {
     if (!currentSong) return;
-    if (!audioContextRef.current) {
-      try {
-        audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
-      } catch (e) {
-        console.error("AudioContext error:", e);
-        return;
-      }
-    }
-
+    if (!audioContextRef.current)
+      audioContextRef.current = new AudioContext();
     setIsPlaying(true);
     beatRef.current = 1;
     barRef.current = 0;
     setCurrentBeat(1);
     setCurrentBar(0);
-
     nextNoteTimeRef.current = audioContextRef.current.currentTime;
     schedule();
   };
@@ -324,14 +248,13 @@ function App() {
     if (timerRef.current) clearTimeout(timerRef.current);
   };
 
-  useEffect(() => stop, []); // cleanup on unmount
+  useEffect(() => stop, []);
 
-  // ---------- Вспомогательные вычисления для визуализации ----------
   const ranges = currentSong
     ? (() => {
         let start = 0;
         return currentSong.sections.map(sec => {
-          const end = start + (Number(sec.bars) || 0) - 1;
+          const end = start + sec.bars - 1;
           const out = { start, end };
           start = end + 1;
           return out;
@@ -339,44 +262,58 @@ function App() {
       })()
     : [];
 
-  const currentSectionIndex = ranges.findIndex(
-    r => currentBar >= r.start && currentBar <= r.end
-  );
+  const currentSectionIndex =
+    ranges.findIndex(r => currentBar >= r.start && currentBar <= r.end);
 
   useEffect(() => {
     if (isPlaying && currentSectionRef.current) {
-      currentSectionRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+      currentSectionRef.current.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
     }
   }, [currentBar, isPlaying]);
 
-  // ---------- UI ----------
-  if (!authReady) {
+  // ====== UI RENDER ======
+  // Если код не введён или неверный — показываем форму
+  if (bandCode !== CORRECT_CODE) {
     return (
-      <div className="min-h-screen bg-black text-white flex items-center justify-center">
-        <div className="text-center">
-          <div className="text-2xl font-bold mb-2">Metronome</div>
-          <div className="opacity-70">Connecting…</div>
+      <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 text-white p-6 flex items-center justify-center">
+        <div className="glass p-6 rounded-3xl w-full max-w-sm">
+          <h1 className="text-2xl font-black mb-4">🔐 Доступ к группе</h1>
+          <p className="opacity-90 mb-3">Введите код группы, чтобы увидеть и редактировать общие песни.</p>
+
+          <input
+            type="password"
+            placeholder="Код группы"
+            value={bandCodeInput}
+            onChange={(e) => setBandCodeInput(e.target.value)}
+            className="w-full p-3 rounded-xl bg-white/10 text-white mb-3 border border-white/20"
+          />
+          {codeError && <div className="text-red-300 text-sm mb-2">{codeError}</div>}
+
+          <button
+            onClick={handleSubmitCode}
+            className="w-full p-3 rounded-xl bg-green-600 font-bold"
+          >
+            Войти
+          </button>
         </div>
+
+        <style>{`.glass{background:rgba(255,255,255,0.05);backdrop-filter:blur(15px);}`}</style>
       </div>
     );
   }
 
   return (
     <div className="min-h-screen pb-28 bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 text-white p-6 flex flex-col items-center">
-      <h1 className="text-3xl font-black mb-2">🎧 Metronome</h1>
+      <h1 className="text-3xl font-black mb-6">🎧 Metronome</h1>
 
-      {/* Имя участника (локально, для "updatedBy") */}
-      <div className="w-full max-w-xl mb-4">
-        <input
-          type="text"
-          placeholder="Your name (for updates)"
-          value={displayName}
-          onChange={(e) => setDisplayName(e.target.value)}
-          className="w-full p-3 rounded-xl bg-white/10 text-white placeholder-white/40"
-        />
+      <div className="mb-4 opacity-70 text-sm">
+        Группа: <span className="font-mono bg-white/10 px-2 py-1 rounded">0000</span>
+        <button className="ml-3 text-red-300 underline" onClick={resetCode}>сменить код</button>
       </div>
 
-      {/* SONG LIST */}
       {!currentSong && (
         <>
           <div className="glass p-6 rounded-3xl w-full max-w-xl mb-6">
@@ -387,9 +324,7 @@ function App() {
               onChange={(e) => setNewSongName(e.target.value)}
               className="w-full p-3 rounded-xl bg-white/10 text-white mb-3"
             />
-            <button onClick={createSong} className="w-full p-3 rounded-xl bg-green-600 font-bold">
-              ➕ Add song
-            </button>
+            <button onClick={createSong} className="w-full p-3 rounded-xl bg-green-600 font-bold">➕ Add song</button>
           </div>
 
           {songs.map((song, i) => (
@@ -398,42 +333,31 @@ function App() {
               className="flex gap-2 w-full max-w-xl mb-2"
               draggable
               onDragStart={songDragStart(i)}
-              onDragOver={(e) => e.preventDefault()}
+              onDragOver={allow}
               onDrop={songDrop(i)}
             >
               <span className="cursor-grab select-none text-white/50">↕</span>
-              <button
-                onClick={() => selectSong(song)}
-                className="flex-1 p-3 bg-white/10 hover:bg-white/20 rounded-xl text-left"
-              >
+              <button onClick={() => selectSong(song)} className="flex-1 p-3 bg-white/10 hover:bg-white/20 rounded-xl">
                 🎵 {song.name}
-                {song.updatedBy && (
-                  <span className="block text-xs opacity-60 mt-1">
-                    updated by {song.updatedBy}
-                  </span>
-                )}
               </button>
-              <button onClick={() => deleteSong(song.id)} className="p-3 bg-red-600 rounded-xl">
-                🗑
-              </button>
+              <button onClick={() => deleteSong(song.id)} className="p-3 bg-red-600 rounded-xl">🗑</button>
             </div>
           ))}
         </>
       )}
 
-      {/* SONG EDITOR */}
       {currentSong && (
         <div className="glass p-6 rounded-3xl w-full max-w-xl">
-          <div className="flex justify-between mb-4 items-center">
+          <div className="flex justify-between mb-4">
             <h2 className="text-xl font-bold">{currentSong.name}</h2>
-            <button onClick={() => { setCurrentSongId(null); stop(); }} className="px-3 py-2 bg-purple-600 rounded-lg">
+            <button onClick={() => { setCurrentSong(null); stop(); }} className="px-3 py-2 bg-purple-600 rounded-lg">
               ← Back
             </button>
           </div>
 
           <div className="space-y-3 mb-6">
             {currentSong.sections.map((sec, i) => {
-              const isIntro = !!sec.intro;
+              const isIntro = sec.intro;
               const isCurrentSection = i === currentSectionIndex;
               const range = ranges[i];
 
@@ -443,7 +367,7 @@ function App() {
                   ref={isCurrentSection ? currentSectionRef : null}
                   draggable={!isIntro}
                   onDragStart={sectionDragStart(i)}
-                  onDragOver={(e) => e.preventDefault()}
+                  onDragOver={allow}
                   onDrop={sectionDrop(i)}
                   className={`p-3 rounded-2xl border ${
                     isCurrentSection
@@ -462,16 +386,12 @@ function App() {
                     )}
                   </div>
 
-                  {/* Комментарий под прогрессом кликов */}
                   {sec.comment && (
-                    <div className="text-white/90 font-bold text-lg mt-2">
-                      {sec.comment}
-                    </div>
+                    <div className="text-white/90 font-bold text-lg mt-2">{sec.comment}</div>
                   )}
 
-                  {/* CLICK GRID */}
                   <div className="grid grid-cols-4 gap-1">
-                    {Array.from({ length: (Number(sec.bars) || 0) * 4 }).map((_, idx) => {
+                    {Array.from({ length: sec.bars * 4 }).map((_, idx) => {
                       const barNum = range.start + Math.floor(idx / 4);
                       const localBeat = (idx % 4) + 1;
                       const absClick = barNum * 4 + (localBeat - 1);
@@ -498,7 +418,7 @@ function App() {
               );
             })}
 
-            {/* ADD SECTION — по клику раскрываем форму, как согласовано (Вариант A) */}
+            {/* ✅ ADD SECTION FORM UNDER SECTIONS */}
             {!showAddForm ? (
               <button
                 onClick={() => setShowAddForm(true)}
@@ -533,10 +453,16 @@ function App() {
                 />
 
                 <div className="flex gap-3">
-                  <button onClick={addSection} className="flex-1 py-2 bg-green-600 rounded-lg font-bold">
+                  <button
+                    onClick={addSection}
+                    className="flex-1 py-2 bg-green-600 rounded-lg font-bold"
+                  >
                     ✔ Save Section
                   </button>
-                  <button onClick={() => setShowAddForm(false)} className="py-2 px-4 bg-gray-500 rounded-lg font-bold">
+                  <button
+                    onClick={() => setShowAddForm(false)}
+                    className="py-2 px-4 bg-gray-500 rounded-lg font-bold"
+                  >
                     ✖
                   </button>
                 </div>
@@ -573,6 +499,10 @@ function App() {
           </div>
         </div>
       )}
+
+      <style>{`
+        .glass { background: rgba(255,255,255,0.05); backdrop-filter: blur(15px); }
+      `}</style>
     </div>
   );
 }
