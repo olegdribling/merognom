@@ -234,8 +234,8 @@ const schedule = () => {
   //  КОНЕЦ
 
   // чтото по визуалу
-  const updateVisual = () => {
-  if (!isPlaying || !audioContextRef.current) return;
+const updateVisual = () => {
+  if (!audioContextRef.current) return;
   
   const ct = audioContextRef.current.currentTime;
   const elapsed = ct - startTimeRef.current;
@@ -290,6 +290,11 @@ const stop = () => {
 };
 
   useEffect(() => stop, []);
+  useEffect(() => {
+  if (!isPlaying && animationFrameRef.current) {
+    cancelAnimationFrame(animationFrameRef.current);
+  }
+}, [isPlaying]);
 
   const ranges = currentSong
     ? (() => {
