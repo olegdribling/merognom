@@ -412,7 +412,6 @@ function App() {
     const localBeat = (idx % 4) + 1;
     const absClick = barNum * 4 + (localBeat - 1);
     const currentAbs = currentBar * 4 + currentBeat - 1;
-    const isActive = absClick === currentAbs;
     const isPassed = absClick < currentAbs;
     const isFirstBeat = localBeat === 1;
 
@@ -421,13 +420,11 @@ function App() {
         key={idx} 
         className={`
           h-5 rounded-md transition-all duration-100
-          ${isActive 
-            ? 'bg-yellow-400 scale-110 shadow-[0_0_20px_rgba(250,204,21,0.8)]' 
-            : isPassed 
-              ? 'bg-green-500/70' 
-              : isFirstBeat 
-                ? 'bg-white/30 border-2 border-white/50' 
-                : 'bg-white/15'
+          ${isPassed 
+            ? 'bg-green-500/70' 
+            : isFirstBeat 
+              ? 'bg-white/30 border-2 border-white/50' 
+              : 'bg-white/15'
           }
         `}
       />
