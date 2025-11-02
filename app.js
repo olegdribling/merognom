@@ -52,7 +52,7 @@ function App() {
   const beatRef = useRef(1);
   const barRef = useRef(0);
   const currentSectionRef = useRef(null);
-  const visualTimersRef = useRef([]);
+  //const visualTimersRef = useRef([]);
 
   const totalBars = song => song ? song.sections.reduce((s, sec) => s + sec.bars, 0) : 0;
 
