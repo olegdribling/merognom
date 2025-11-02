@@ -207,12 +207,26 @@ function App() {
     osc.stop(time + 0.08);
   };
 
-  const schedule = () => {
+    const schedule = () => {
     const ct = audioContextRef.current.currentTime;
-    while (nextNoteTimeRef.current < ct + 0.1) {
-      clickSound(nextNoteTimeRef.current, beatRef.current === 1);
-      setCurrentBeat(beatRef.current);
-      setCurrentBar(barRef.current);
+    const lookahead = 0.1;
+    
+    while (nextNoteTimeRef.current < ct + lookahead) {
+      const scheduledTime = nextNoteTimeRef.current;
+      const currentBeatValue = beatRef.current;
+      const currentBarValue = barRef.current;
+      
+      // Рассчитываем задержку для визуала (синхронно со звуком)
+      const visualDelay = Math.max(0, (scheduledTime - ct) * 1000);
+      
+      // Обновляем визуал с той же задержкой, что и звук
+      setTimeout(() => {
+        setCurrentBeat(currentBeatValue);
+        setCurrentBar(currentBarValue);
+      }, visualDelay);
+      
+      // Планируем звук
+      clickSound(scheduledTime, currentBeatValue === 1);
 
       nextNoteTimeRef.current += 60 / bpm;
 
@@ -220,9 +234,11 @@ function App() {
         beatRef.current = 1;
         barRef.current += 1;
         if (barRef.current >= totalBars(currentSong)) {
-          stop();
-          setCurrentBeat(1);
-          setCurrentBar(0);
+          setTimeout(() => {
+            stop();
+            setCurrentBeat(1);
+            setCurrentBar(0);
+          }, visualDelay);
           return;
         }
       } else beatRef.current += 1;
