@@ -200,7 +200,7 @@ function App() {
     gain.connect(audioContextRef.current.destination);
 
     osc.frequency.value = accent ? 1400 : 900;
-    gain.gain.value = accent ? 0.55 : 0.2;
+    gain.gain.value = accent ? 1 : 0.55;
 
     osc.start(time);
     gain.gain.exponentialRampToValueAtTime(0.001, time + 0.08);
