@@ -52,8 +52,6 @@ function App() {
   const beatRef = useRef(1);
   const barRef = useRef(0);
   const currentSectionRef = useRef(null);
-  const animationFrameRef = useRef(null);
-const startTimeRef = useRef(0);
 
   const totalBars = song => song ? song.sections.reduce((s, sec) => s + sec.bars, 0) : 0;
 
@@ -209,14 +207,21 @@ const startTimeRef = useRef(0);
     osc.stop(time + 0.08);
   };
 
-  
-//  ТАЙМЕРЫ КЛИКОВ И ИХ СИНХРОНИЗАЦИЯ
-  
-const schedule = () => {
+  const schedule = () => {
   const ct = audioContextRef.current.currentTime;
   
   while (nextNoteTimeRef.current < ct + 0.1) {
+    // Звук
     clickSound(nextNoteTimeRef.current, beatRef.current === 1);
+    
+    // Визуал синхронно
+    const currentBeatToShow = beatRef.current;
+    const currentBarToShow = barRef.current;
+    
+    requestAnimationFrame(() => {
+      setCurrentBeat(currentBeatToShow);
+      setCurrentBar(currentBarToShow);
+    });
 
     nextNoteTimeRef.current += 60 / bpm;
 
@@ -224,6 +229,9 @@ const schedule = () => {
       beatRef.current = 1;
       barRef.current += 1;
       if (barRef.current >= totalBars(currentSong)) {
+        stop();
+        setCurrentBeat(1);
+        setCurrentBar(0);
         return;
       }
     } else beatRef.current += 1;
@@ -231,70 +239,25 @@ const schedule = () => {
   timerRef.current = setTimeout(schedule, 25);
 };
 
-  //  КОНЕЦ
-
-  // чтото по визуалу
-const updateVisual = () => {
-  if (!audioContextRef.current) return;
-  
-  const ct = audioContextRef.current.currentTime;
-  const elapsed = ct - startTimeRef.current;
-  const beatDuration = 60 / bpm;
-  
-  const totalBeats = Math.floor(elapsed / beatDuration);
-  const calcBar = Math.floor(totalBeats / beatsPerBar);
-  const calcBeat = (totalBeats % beatsPerBar) + 1;
-  
-  if (calcBar >= totalBars(currentSong)) {
-    stop();
+  const start = () => {
+    if (!currentSong) return;
+    if (!audioContextRef.current)
+      audioContextRef.current = new AudioContext();
+    setIsPlaying(true);
+    beatRef.current = 1;
+    barRef.current = 0;
     setCurrentBeat(1);
     setCurrentBar(0);
-    return;
-  }
-  
-  setCurrentBeat(calcBeat);
-  setCurrentBar(calcBar);
-  
-  animationFrameRef.current = requestAnimationFrame(updateVisual);
-};
+    nextNoteTimeRef.current = audioContextRef.current.currentTime;
+    schedule();
+  };
 
-  // конец
-
-  //ФУНКЦИЯ СТАРТ
- const start = () => {
-  if (!currentSong) return;
-  if (!audioContextRef.current)
-    audioContextRef.current = new AudioContext();
-  
-  setIsPlaying(true);
-  beatRef.current = 1;
-  barRef.current = 0;
-  setCurrentBeat(1);
-  setCurrentBar(0);
-  
-  startTimeRef.current = audioContextRef.current.currentTime;
-  nextNoteTimeRef.current = audioContextRef.current.currentTime;
-  
-  schedule();
-  updateVisual();
-};
-
-
-  
-// ФУНКЦИЯ СТОП
-  
-const stop = () => {
-  setIsPlaying(false);
-  if (timerRef.current) clearTimeout(timerRef.current);
-  if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
-};
+  const stop = () => {
+    setIsPlaying(false);
+    if (timerRef.current) clearTimeout(timerRef.current);
+  };
 
   useEffect(() => stop, []);
-  useEffect(() => {
-  if (!isPlaying && animationFrameRef.current) {
-    cancelAnimationFrame(animationFrameRef.current);
-  }
-}, [isPlaying]);
 
   const ranges = currentSong
     ? (() => {
@@ -435,32 +398,31 @@ const stop = () => {
                   {sec.comment && (
                     <div className="text-white/90 font-bold text-lg mt-2">{sec.comment}</div>
                   )}
-// БЛОКИ КЛИКОВ
-                 <div className="grid grid-cols-4 gap-1">
-  {Array.from({ length: sec.bars * 4 }).map((_, idx) => {
-    const barNum = range.start + Math.floor(idx / 4);
-    const localBeat = (idx % 4) + 1;
-    const absClick = barNum * 4 + (localBeat - 1);
-    const currentAbs = currentBar * 4 + currentBeat - 1;
-    const isPassed = absClick < currentAbs;
-    const isFirstBeat = localBeat === 1;
 
-    return (
-      <div 
-        key={idx} 
-        className={`
-          h-5 rounded-md transition-all duration-75
-          ${isPassed 
-            ? 'bg-green-500/70' 
-            : isFirstBeat 
-              ? 'bg-white/30 border-2 border-white/50' 
-              : 'bg-white/15'
-          }
-        `}
-      />
-    );
-  })}
-</div>
+                  <div className="grid grid-cols-4 gap-1">
+                    {Array.from({ length: sec.bars * 4 }).map((_, idx) => {
+                      const barNum = range.start + Math.floor(idx / 4);
+                      const localBeat = (idx % 4) + 1;
+                      const absClick = barNum * 4 + (localBeat - 1);
+                      const currentAbs = currentBar * 4 + currentBeat - 1;
+                      const past = absClick < currentAbs;
+                      const now = absClick === currentAbs;
+
+                      return (
+                        <div key={idx} className="h-4 relative rounded-sm border border-gray-700 bg-gray-800">
+                          <div
+                            className={`
+                              absolute left-0 top-0 h-full transition-all duration-150
+                              ${past ? "bg-green-400" : now ? "bg-yellow-400 drop-shadow-[0_0_12px_rgba(255,255,0,1)]" : ""}
+                            `}
+                            style={{
+                              width: now ? `${(currentBeat / beatsPerBar) * 100}%` : past ? "100%" : "0%"
+                            }}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               );
             })}
