@@ -245,7 +245,9 @@ function App() {
   }
   timerRef.current = setTimeout(schedule, 25);
 };
+// КОНЕЦ ШЕДУЛЕРА
 
+  //СТАРТ
   const start = () => {
     if (!currentSong) return;
     if (!audioContextRef.current)
@@ -259,6 +261,7 @@ function App() {
     schedule();
   };
 
+  //СТОП
   const stop = () => {
     setIsPlaying(false);
     if (timerRef.current) clearTimeout(timerRef.current);
@@ -325,10 +328,11 @@ function App() {
     <div className="min-h-screen pb-28 bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 text-white p-6 flex flex-col items-center">
       <h1 className="text-3xl font-black mb-6">🎧 Metronome</h1>
 
-      <div className="mb-4 opacity-70 text-sm">
-        Группа: <span className="font-mono bg-white/10 px-2 py-1 rounded">0000</span>
-        <button className="ml-3 text-red-300 underline" onClick={resetCode}>сменить код</button>
-      </div>
+      {/* <div className="mb-4 opacity-70 text-sm">
+      //   Группа: <span className="font-mono bg-white/10 px-2 py-1 rounded">0000</span>
+      //   <button className="ml-3 text-red-300 underline" onClick={resetCode}>сменить код</button>
+      //  </div>
+      */}
 
       {!currentSong && (
         <>
@@ -418,21 +422,22 @@ function App() {
     const isFirstBeat = localBeat === 1;
 
     return (
-      <div 
-        key={idx} 
+      <div
+        key={idx}
         className={`
           h-5 rounded-md transition-all duration-100
-          ${isPassed 
-            ? 'bg-green-500/70' 
-            : isFirstBeat 
-              ? 'bg-white/30 border-2 border-white/50' 
+          ${isPassed
+            ? 'bg-green-500/70'
+            : isFirstBeat
+              ? 'bg-white/30 border-2 border-white/50'
               : 'bg-white/15'
           }
         `}
-      /div>
+      ></div>
     );
   })}
 </div>
+
   //КОНЕЦ
                 </div>
               );
