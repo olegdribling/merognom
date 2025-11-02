@@ -207,44 +207,53 @@ function App() {
     osc.stop(time + 0.08);
   };
 
-    const schedule = () => {
-    const ct = audioContextRef.current.currentTime;
-    const lookahead = 0.1;
+  
+//  ТАЙМЕРЫ КЛИКОВ И ИХ СИНХРОНИЗАЦИЯ
+  
+const visualTimersRef = useRef([]); // добавь этот ref в начало компонента
+
+const schedule = () => {
+  const ct = audioContextRef.current.currentTime;
+  const lookahead = 0.1;
+  
+  while (nextNoteTimeRef.current < ct + lookahead) {
+    const scheduledTime = nextNoteTimeRef.current;
+    const currentBeatValue = beatRef.current;
+    const currentBarValue = barRef.current;
     
-    while (nextNoteTimeRef.current < ct + lookahead) {
-      const scheduledTime = nextNoteTimeRef.current;
-      const currentBeatValue = beatRef.current;
-      const currentBarValue = barRef.current;
-      
-      // Рассчитываем задержку для визуала (синхронно со звуком)
-      const visualDelay = Math.max(0, (scheduledTime - ct) * 1000);
-      
-      // Обновляем визуал с той же задержкой, что и звук
-      setTimeout(() => {
-        setCurrentBeat(currentBeatValue);
-        setCurrentBar(currentBarValue);
-      }, visualDelay);
-      
-      // Планируем звук
-      clickSound(scheduledTime, currentBeatValue === 1);
+    // Рассчитываем задержку для визуала (синхронно со звуком)
+    const visualDelay = Math.max(0, (scheduledTime - ct) * 1000);
+    
+    // Обновляем визуал с той же задержкой, что и звук
+    const timerId = setTimeout(() => {
+      setCurrentBeat(currentBeatValue);
+      setCurrentBar(currentBarValue);
+    }, visualDelay);
+    
+    visualTimersRef.current.push(timerId); // сохраняем ID таймера
+    
+    // Планируем звук
+    clickSound(scheduledTime, currentBeatValue === 1);
 
-      nextNoteTimeRef.current += 60 / bpm;
+    nextNoteTimeRef.current += 60 / bpm;
 
-      if (beatRef.current === beatsPerBar) {
-        beatRef.current = 1;
-        barRef.current += 1;
-        if (barRef.current >= totalBars(currentSong)) {
-          setTimeout(() => {
-            stop();
-            setCurrentBeat(1);
-            setCurrentBar(0);
-          }, visualDelay);
-          return;
-        }
-      } else beatRef.current += 1;
-    }
-    timerRef.current = setTimeout(schedule, 25);
-  };
+    if (beatRef.current === beatsPerBar) {
+      beatRef.current = 1;
+      barRef.current += 1;
+      if (barRef.current >= totalBars(currentSong)) {
+        setTimeout(() => {
+          stop();
+          setCurrentBeat(1);
+          setCurrentBar(0);
+        }, visualDelay);
+        return;
+      }
+    } else beatRef.current += 1;
+  }
+  timerRef.current = setTimeout(schedule, 25);
+};
+
+  //  КОНЕЦ
 
   const start = () => {
     if (!currentSong) return;
@@ -259,10 +268,14 @@ function App() {
     schedule();
   };
 
-  const stop = () => {
-    setIsPlaying(false);
-    if (timerRef.current) clearTimeout(timerRef.current);
-  };
+ const stop = () => {
+  setIsPlaying(false);
+  if (timerRef.current) clearTimeout(timerRef.current);
+  
+  // Очищаем все визуальные таймеры
+  visualTimersRef.current.forEach(id => clearTimeout(id));
+  visualTimersRef.current = [];
+};
 
   useEffect(() => stop, []);
 
