@@ -429,7 +429,7 @@ function App() {
               : 'bg-white/15'
           }
         `}
-      />
+      /div>
     );
   })}
 </div>
