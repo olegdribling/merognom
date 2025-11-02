@@ -52,7 +52,8 @@ function App() {
   const beatRef = useRef(1);
   const barRef = useRef(0);
   const currentSectionRef = useRef(null);
-  //const visualTimersRef = useRef([]);
+  const animationFrameRef = useRef(null);
+const startTimeRef = useRef(0);
 
   const totalBars = song => song ? song.sections.reduce((s, sec) => s + sec.bars, 0) : 0;
 
@@ -211,30 +212,11 @@ function App() {
   
 //  ТАЙМЕРЫ КЛИКОВ И ИХ СИНХРОНИЗАЦИЯ
   
-const visualTimersRef = useRef([]); // добавь этот ref в начало компонента
-
 const schedule = () => {
   const ct = audioContextRef.current.currentTime;
-  const lookahead = 0.1;
   
-  while (nextNoteTimeRef.current < ct + lookahead) {
-    const scheduledTime = nextNoteTimeRef.current;
-    const currentBeatValue = beatRef.current;
-    const currentBarValue = barRef.current;
-    
-    // Рассчитываем задержку для визуала (синхронно со звуком)
-    const visualDelay = Math.max(0, (scheduledTime - ct) * 1000);
-    
-    // Обновляем визуал с той же задержкой, что и звук
-    const timerId = setTimeout(() => {
-      setCurrentBeat(currentBeatValue);
-      setCurrentBar(currentBarValue);
-    }, visualDelay);
-    
-    visualTimersRef.current.push(timerId); // сохраняем ID таймера
-    
-    // Планируем звук
-    clickSound(scheduledTime, currentBeatValue === 1);
+  while (nextNoteTimeRef.current < ct + 0.1) {
+    clickSound(nextNoteTimeRef.current, beatRef.current === 1);
 
     nextNoteTimeRef.current += 60 / bpm;
 
@@ -242,11 +224,6 @@ const schedule = () => {
       beatRef.current = 1;
       barRef.current += 1;
       if (barRef.current >= totalBars(currentSong)) {
-        setTimeout(() => {
-          stop();
-          setCurrentBeat(1);
-          setCurrentBar(0);
-        }, visualDelay);
         return;
       }
     } else beatRef.current += 1;
@@ -256,26 +233,60 @@ const schedule = () => {
 
   //  КОНЕЦ
 
-  const start = () => {
-    if (!currentSong) return;
-    if (!audioContextRef.current)
-      audioContextRef.current = new AudioContext();
-    setIsPlaying(true);
-    beatRef.current = 1;
-    barRef.current = 0;
+  // чтото по визуалу
+  const updateVisual = () => {
+  if (!isPlaying || !audioContextRef.current) return;
+  
+  const ct = audioContextRef.current.currentTime;
+  const elapsed = ct - startTimeRef.current;
+  const beatDuration = 60 / bpm;
+  
+  const totalBeats = Math.floor(elapsed / beatDuration);
+  const calcBar = Math.floor(totalBeats / beatsPerBar);
+  const calcBeat = (totalBeats % beatsPerBar) + 1;
+  
+  if (calcBar >= totalBars(currentSong)) {
+    stop();
     setCurrentBeat(1);
     setCurrentBar(0);
-    nextNoteTimeRef.current = audioContextRef.current.currentTime;
-    schedule();
-  };
+    return;
+  }
+  
+  setCurrentBeat(calcBeat);
+  setCurrentBar(calcBar);
+  
+  animationFrameRef.current = requestAnimationFrame(updateVisual);
+};
 
- const stop = () => {
+  // конец
+
+  //ФУНКЦИЯ СТАРТ
+ const start = () => {
+  if (!currentSong) return;
+  if (!audioContextRef.current)
+    audioContextRef.current = new AudioContext();
+  
+  setIsPlaying(true);
+  beatRef.current = 1;
+  barRef.current = 0;
+  setCurrentBeat(1);
+  setCurrentBar(0);
+  
+  startTimeRef.current = audioContextRef.current.currentTime;
+  nextNoteTimeRef.current = audioContextRef.current.currentTime;
+  
+  schedule();
+  updateVisual();
+};
+
+
+  
+// ФУНКЦИЯ СТОП
+  
+const stop = () => {
   setIsPlaying(false);
   if (timerRef.current) clearTimeout(timerRef.current);
-  
-  // Очищаем все визуальные таймеры
-  visualTimersRef.current.forEach(id => clearTimeout(id));
-  visualTimersRef.current = [];
+  if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
 };
 
   useEffect(() => stop, []);
@@ -419,7 +430,7 @@ const schedule = () => {
                   {sec.comment && (
                     <div className="text-white/90 font-bold text-lg mt-2">{sec.comment}</div>
                   )}
-
+// БЛОКИ КЛИКОВ
                  <div className="grid grid-cols-4 gap-1">
   {Array.from({ length: sec.bars * 4 }).map((_, idx) => {
     const barNum = range.start + Math.floor(idx / 4);
@@ -433,7 +444,7 @@ const schedule = () => {
       <div 
         key={idx} 
         className={`
-          h-5 rounded-md transition-all duration-100
+          h-5 rounded-md transition-all duration-75
           ${isPassed 
             ? 'bg-green-500/70' 
             : isFirstBeat 
