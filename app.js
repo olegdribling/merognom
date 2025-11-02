@@ -399,30 +399,38 @@ function App() {
                     <div className="text-white/90 font-bold text-lg mt-2">{sec.comment}</div>
                   )}
 
-                  <div className="grid grid-cols-4 gap-1">
-                    {Array.from({ length: sec.bars * 4 }).map((_, idx) => {
-                      const barNum = range.start + Math.floor(idx / 4);
-                      const localBeat = (idx % 4) + 1;
-                      const absClick = barNum * 4 + (localBeat - 1);
-                      const currentAbs = currentBar * 4 + currentBeat - 1;
-                      const past = absClick < currentAbs;
-                      const now = absClick === currentAbs;
+                  //  ВИЗУАЛ БЛОКОВ
 
-                      return (
-                        <div key={idx} className="h-4 relative rounded-sm border border-gray-700 bg-gray-800">
-                          <div
-                            className={`
-                              absolute left-0 top-0 h-full transition-all duration-150
-                              ${past ? "bg-green-400" : now ? "bg-yellow-400 drop-shadow-[0_0_12px_rgba(255,255,0,1)]" : ""}
-                            `}
-                            style={{
-                              width: now ? `${(currentBeat / beatsPerBar) * 100}%` : past ? "100%" : "0%"
-                            }}
-                          />
-                        </div>
-                      );
-                    })}
-                  </div>
+<div className="grid grid-cols-4 gap-1">
+  {Array.from({ length: sec.bars * 4 }).map((_, idx) => {
+    const barNum = range.start + Math.floor(idx / 4);
+    const localBeat = (idx % 4) + 1;
+    const absClick = barNum * 4 + (localBeat - 1);
+    const currentAbs = currentBar * 4 + currentBeat - 1;
+    const isActive = absClick === currentAbs;
+    const isPassed = absClick < currentAbs;
+    const isFirstBeat = localBeat === 1;
+
+    return (
+      <div 
+        key={idx} 
+        className={`
+          h-5 rounded-md transition-all duration-100
+          ${isActive 
+            ? 'bg-yellow-400 scale-110 shadow-[0_0_20px_rgba(250,204,21,0.8)]' 
+            : isPassed 
+              ? 'bg-green-500/70' 
+              : isFirstBeat 
+                ? 'bg-white/30 border-2 border-white/50' 
+                : 'bg-white/15'
+          }
+        `}
+      />
+    );
+  })}
+</div>
+
+  //КОНЕЦ
                 </div>
               );
             })}
