@@ -52,6 +52,8 @@ function App() {
   const beatRef = useRef(1);
   const barRef = useRef(0);
   const currentSectionRef = useRef(null);
+  const visualQueueRef = useRef([]);
+  const visualRafRef = useRef(null);
 
   const totalBars = song => song ? song.sections.reduce((s, sec) => s + sec.bars, 0) : 0;
 
@@ -200,7 +202,7 @@ function App() {
     gain.connect(audioContextRef.current.destination);
 
     osc.frequency.value = accent ? 1400 : 900;
-    gain.gain.value = accent ? 1 : 0.55;
+    gain.gain.value = 1;
 
     osc.start(time);
     gain.gain.exponentialRampToValueAtTime(0.001, time + 0.08);
@@ -215,15 +217,13 @@ function App() {
     const scheduledTime = nextNoteTimeRef.current;
     const currentBeatValue = beatRef.current;
     const currentBarValue = barRef.current;
-    
-    // Рассчитываем задержку для визуала (синхронно со звуком)
-    const visualDelay = Math.max(0, (scheduledTime - ct) * 1000);
-    
-    // Обновляем визуал с той же задержкой, что и звук
-    setTimeout(() => {
-      setCurrentBeat(currentBeatValue);
-      setCurrentBar(currentBarValue);
-    }, visualDelay);
+
+    visualQueueRef.current.push({
+      time: scheduledTime,
+      type: "beat",
+      beat: currentBeatValue,
+      bar: currentBarValue,
+    });
     
     // Планируем звук
     clickSound(scheduledTime, currentBeatValue === 1);
@@ -234,11 +234,10 @@ function App() {
       beatRef.current = 1;
       barRef.current += 1;
       if (barRef.current >= totalBars(currentSong)) {
-        setTimeout(() => {
-          stop();
-          setCurrentBeat(1);
-          setCurrentBar(0);
-        }, visualDelay);
+        visualQueueRef.current.push({
+          time: scheduledTime + 0.001,
+          type: "stop",
+        });
         return;
       }
     } else beatRef.current += 1;
@@ -257,6 +256,7 @@ function App() {
     barRef.current = 0;
     setCurrentBeat(1);
     setCurrentBar(0);
+    visualQueueRef.current = [];
     nextNoteTimeRef.current = audioContextRef.current.currentTime;
     schedule();
   };
@@ -264,8 +264,63 @@ function App() {
   //СТОП
   const stop = () => {
     setIsPlaying(false);
-    if (timerRef.current) clearTimeout(timerRef.current);
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    if (visualRafRef.current) {
+      cancelAnimationFrame(visualRafRef.current);
+      visualRafRef.current = null;
+    }
+    visualQueueRef.current = [];
   };
+
+  useEffect(() => {
+    if (!isPlaying) return;
+
+    const processVisuals = () => {
+      if (!audioContextRef.current) {
+        visualRafRef.current = requestAnimationFrame(processVisuals);
+        return;
+      }
+
+      const now = audioContextRef.current.currentTime;
+
+      while (visualQueueRef.current.length && visualQueueRef.current[0].time <= now) {
+        const event = visualQueueRef.current.shift();
+        if (event.type === "stop") {
+          setCurrentBeat(1);
+          setCurrentBar(0);
+          setIsPlaying(false);
+          if (timerRef.current) {
+            clearTimeout(timerRef.current);
+            timerRef.current = null;
+          }
+          visualQueueRef.current = [];
+          if (visualRafRef.current) {
+            cancelAnimationFrame(visualRafRef.current);
+            visualRafRef.current = null;
+          }
+          return;
+        }
+
+        setCurrentBeat(event.beat);
+        setCurrentBar(event.bar);
+      }
+
+      visualRafRef.current = requestAnimationFrame(processVisuals);
+    };
+
+    visualRafRef.current = requestAnimationFrame(processVisuals);
+
+    return () => {
+      if (visualRafRef.current) {
+        cancelAnimationFrame(visualRafRef.current);
+        visualRafRef.current = null;
+      }
+      visualQueueRef.current = [];
+    };
+  }, [isPlaying]);
 
   useEffect(() => stop, []);
 
@@ -328,12 +383,7 @@ function App() {
     <div className="min-h-screen pb-28 bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 text-white p-6 flex flex-col items-center">
       <h1 className="text-3xl font-black mb-6">🎧 Metronome</h1>
 
-      {/* <div className="mb-4 opacity-70 text-sm">
-      //   Группа: <span className="font-mono bg-white/10 px-2 py-1 rounded">0000</span>
-      //   <button className="ml-3 text-red-300 underline" onClick={resetCode}>сменить код</button>
-      //  </div>
-      */}
-
+     
       {!currentSong && (
         <>
           <div className="glass p-6 rounded-3xl w-full max-w-xl mb-6">
@@ -410,15 +460,16 @@ function App() {
                     <div className="text-white/90 font-bold text-lg mt-2">{sec.comment}</div>
                   )}
 
-                  //  ВИЗУАЛ БЛОКОВ
-
+                 
+{/* ✅ Визуал блоков */}
 <div className="grid grid-cols-4 gap-1">
   {Array.from({ length: sec.bars * 4 }).map((_, idx) => {
     const barNum = range.start + Math.floor(idx / 4);
     const localBeat = (idx % 4) + 1;
     const absClick = barNum * 4 + (localBeat - 1);
     const currentAbs = currentBar * 4 + currentBeat - 1;
-    const isPassed = absClick < currentAbs;
+    const isCurrent = absClick === currentAbs;
+    const isFilled = absClick <= currentAbs;
     const isFirstBeat = localBeat === 1;
 
     return (
@@ -426,8 +477,10 @@ function App() {
         key={idx}
         className={`
           h-5 rounded-md transition-all duration-100
-          ${isPassed
-            ? 'bg-green-500/70'
+          ${isFilled
+            ? isCurrent
+              ? 'bg-yellow-400/80 shadow-[0_0_10px_rgba(255,255,0,0.7)]'
+              : 'bg-green-500/70'
             : isFirstBeat
               ? 'bg-white/30 border-2 border-white/50'
               : 'bg-white/15'
@@ -438,7 +491,7 @@ function App() {
   })}
 </div>
 
-  //КОНЕЦ
+
                 </div>
               );
             })}
