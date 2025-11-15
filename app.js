@@ -1,7 +1,7 @@
 // ✅ FULL UPDATED FILE — Group code gate + realtime Firestore sync
 const { useState, useRef, useEffect } = React;
 
-const APP_VERSION = "2024.12.20";
+const APP_VERSION = "2025.11.16";
 const VERSION_KEY = "app_version";
 const RELOAD_FLAG = "app_version_reloading";
 
