@@ -135,3 +135,7 @@ window.MetronomePattern = {
 };
 
 window.PatternEditor = PatternEditor;
+
+if (typeof document !== "undefined") {
+  document.dispatchEvent(new CustomEvent("pattern-editor-ready"));
+}
