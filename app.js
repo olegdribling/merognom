@@ -1,6 +1,95 @@
 // ✅ FULL UPDATED FILE — Group code gate + realtime Firestore sync
 const { useState, useRef, useEffect } = React;
 
+const APP_VERSION = "2025.11.16";
+const VERSION_KEY = "app_version";
+const RELOAD_FLAG = "app_version_reloading";
+
+const patternGlobals = window.MetronomePattern || {};
+const SAMPLES_BASE = "sound/Real Drum Kit";
+const PATTERN_INSTRUMENTS = patternGlobals.PATTERN_INSTRUMENTS || [
+  {
+    id: "bd",
+    label: "BD",
+    color: "#fb923c",
+    freq: 120,
+    sample: `${SAMPLES_BASE}/BD.wav`,
+  },
+  {
+    id: "sd",
+    label: "SD",
+    color: "#facc15",
+    freq: 220,
+    sample: `${SAMPLES_BASE}/SN.wav`,
+  },
+  {
+    id: "hh",
+    label: "HH",
+    color: "#60a5fa",
+    freq: 450,
+    sample: `${SAMPLES_BASE}/HH.wav`,
+  },
+];
+const PATTERN_STEPS = patternGlobals.PATTERN_STEPS || 16;
+const externalCreatePattern = patternGlobals.createEmptyPattern;
+const createPatternBase =
+  typeof externalCreatePattern === "function"
+    ? externalCreatePattern
+    : () => ({
+        steps: PATTERN_STEPS,
+        tracks: PATTERN_INSTRUMENTS.map(inst => ({
+          id: inst.id,
+          name: inst.label,
+          color: inst.color,
+          sample: inst.sample,
+          steps: Array(PATTERN_STEPS).fill(false),
+        })),
+      });
+const PatternEditor = window.PatternEditor;
+
+const instrumentMetaById = PATTERN_INSTRUMENTS.reduce((acc, inst) => {
+  acc[inst.id] = inst;
+  return acc;
+}, {});
+
+const normalizePattern = (pattern) => {
+  const steps = pattern?.steps && pattern.steps > 0 ? pattern.steps : PATTERN_STEPS;
+  const tracks = pattern?.tracks || [];
+  return {
+    steps,
+    tracks: PATTERN_INSTRUMENTS.map(inst => {
+      const existing =
+        tracks.find(t => t.id === inst.id) ||
+        tracks.find(t => t.name === inst.label);
+      const existingSteps = Array.isArray(existing?.steps) ? existing.steps : [];
+      return {
+        id: inst.id,
+        name: inst.label,
+        color: inst.color,
+        sample: inst.sample,
+        steps: Array.from({ length: steps }, (_, idx) => Boolean(existingSteps[idx])),
+      };
+    }),
+  };
+};
+
+const normalizeSong = (song) => ({
+  ...song,
+  pattern: normalizePattern(song?.pattern),
+});
+
+const ensureSongsStructure = (songs = []) => songs.map(normalizeSong);
+
+const createEmptyPatternForSong = () => normalizePattern(createPatternBase());
+
+const patternHasActiveSteps = (pattern) =>
+  !!pattern?.tracks?.some(track => track.steps.some(Boolean));
+
+const instrumentFrequencyMap = PATTERN_INSTRUMENTS.reduce((acc, inst) => {
+  acc[inst.id] = inst.freq || 220;
+  return acc;
+}, {});
+
 function App() {
   // ====== GROUP CODE GATE ======
   const [bandCodeInput, setBandCodeInput] = useState("");
@@ -28,8 +117,8 @@ function App() {
 
   // ====== SONGS STATE ======
   const [songs, setSongs] = useState(() => {
-    const saved = localStorage.getItem('songs_final2');
-    return saved ? JSON.parse(saved) : [];
+    const saved = localStorage.getItem("songs_final2");
+    return saved ? ensureSongsStructure(JSON.parse(saved)) : [];
   });
 
   const [currentSong, setCurrentSong] = useState(null);
@@ -44,8 +133,12 @@ function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentBeat, setCurrentBeat] = useState(1);
   const [currentBar, setCurrentBar] = useState(0);
+  const [currentPatternStep, setCurrentPatternStep] = useState(0);
+  const [showPatternEditor, setShowPatternEditor] = useState(false);
 
   const beatsPerBar = 4;
+  const MIN_BPM = 40;
+  const MAX_BPM = 240;
   const audioContextRef = useRef(null);
   const timerRef = useRef(null);
   const nextNoteTimeRef = useRef(0);
@@ -54,11 +147,122 @@ function App() {
   const currentSectionRef = useRef(null);
   const visualQueueRef = useRef([]);
   const visualRafRef = useRef(null);
+  const sampleDataRef = useRef({});
+  const sampleBufferRef = useRef({});
+  const sampleFetchPromisesRef = useRef({});
+  const sampleDecodePromisesRef = useRef({});
 
   const totalBars = song => song ? song.sections.reduce((s, sec) => s + sec.bars, 0) : 0;
 
+  const fetchSampleData = (instrumentId) => {
+    if (sampleDataRef.current[instrumentId]) {
+      return Promise.resolve(sampleDataRef.current[instrumentId]);
+    }
+    if (sampleFetchPromisesRef.current[instrumentId]) {
+      return sampleFetchPromisesRef.current[instrumentId];
+    }
+    const samplePath = instrumentMetaById[instrumentId]?.sample;
+    if (!samplePath) return Promise.resolve(null);
+    const promise = fetch(samplePath)
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.arrayBuffer();
+      })
+      .then(data => {
+        sampleDataRef.current[instrumentId] = data;
+        return data;
+      })
+      .catch(err => {
+        console.warn(`Failed to fetch sample "${instrumentId}":`, err);
+        return null;
+      })
+      .finally(() => {
+        delete sampleFetchPromisesRef.current[instrumentId];
+      });
+    sampleFetchPromisesRef.current[instrumentId] = promise;
+    return promise;
+  };
+
+  const ensureSampleBuffer = async (instrumentId) => {
+    if (sampleBufferRef.current[instrumentId]) {
+      return sampleBufferRef.current[instrumentId];
+    }
+    if (sampleDecodePromisesRef.current[instrumentId]) {
+      return sampleDecodePromisesRef.current[instrumentId];
+    }
+    if (!audioContextRef.current) return null;
+
+    const data =
+      sampleDataRef.current[instrumentId] ||
+      (await fetchSampleData(instrumentId));
+    if (!data) return null;
+
+    const decodePromise = audioContextRef.current
+      .decodeAudioData(data.slice(0))
+      .then(buffer => {
+        sampleBufferRef.current[instrumentId] = buffer;
+        return buffer;
+      })
+      .catch(err => {
+        console.warn(`Failed to decode sample "${instrumentId}":`, err);
+        return null;
+      })
+      .finally(() => {
+        delete sampleDecodePromisesRef.current[instrumentId];
+      });
+
+    sampleDecodePromisesRef.current[instrumentId] = decodePromise;
+    return decodePromise;
+  };
+
+  useEffect(() => {
+    PATTERN_INSTRUMENTS.forEach(inst => {
+      if (inst.sample) {
+        fetchSampleData(inst.id);
+      }
+    });
+  }, []);
+
   // ====== FIRESTORE REALTIME SYNC ======
   // Слушатель облака (включается только при верном коде)
+  useEffect(() => {
+    const storedVersion = localStorage.getItem(VERSION_KEY);
+    if (storedVersion === APP_VERSION) {
+      sessionStorage.removeItem(RELOAD_FLAG);
+      return;
+    }
+
+    localStorage.setItem(VERSION_KEY, APP_VERSION);
+
+    const cleanupCaches = async () => {
+      try {
+        if (window.caches) {
+          const cachesKeys = await caches.keys();
+          await Promise.all(
+            cachesKeys
+              .filter(name => name.startsWith("metrognom-cache"))
+              .map(name => caches.delete(name))
+          );
+        }
+        if (navigator.serviceWorker?.getRegistrations) {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(regs.map(reg => reg.unregister()));
+        }
+      } catch (err) {
+        console.warn("Version cleanup error:", err);
+      } finally {
+        if (!sessionStorage.getItem(RELOAD_FLAG)) {
+          sessionStorage.setItem(RELOAD_FLAG, "1");
+          window.location.reload();
+        } else {
+          sessionStorage.removeItem(RELOAD_FLAG);
+        }
+      }
+    };
+
+    cleanupCaches();
+  }, []);
+
   useEffect(() => {
     if (bandCode !== CORRECT_CODE) return;
     const docRef = db.collection("bands").doc(bandCode);
@@ -66,12 +270,13 @@ function App() {
     const unsub = docRef.onSnapshot((doc) => {
       const data = doc.data();
       if (data && Array.isArray(data.songs)) {
-        setSongs(data.songs);
-        localStorage.setItem("songs_final2", JSON.stringify(data.songs));
-        // если текущая песня пропала — сбросим выбор
-        if (currentSong && !data.songs.find(s => s.id === currentSong.id)) {
-          setCurrentSong(null);
-        }
+        const normalized = ensureSongsStructure(data.songs);
+        setSongs(normalized);
+        localStorage.setItem("songs_final2", JSON.stringify(normalized));
+        setCurrentSong(prev => {
+          if (!prev) return prev;
+          return normalized.find(s => s.id === prev.id) || null;
+        });
       } else {
         // если документа ещё нет — создадим пустой
         docRef.set({ songs: [], updatedAt: serverTimestamp() }).catch(() => {});
@@ -86,13 +291,14 @@ function App() {
 
   // Сохранение в облако + локально
   const save = async (updatedSongs, updated = currentSong) => {
-    setSongs(updatedSongs);
-    localStorage.setItem("songs_final2", JSON.stringify(updatedSongs));
+    const normalized = ensureSongsStructure(updatedSongs);
+    setSongs(normalized);
+    localStorage.setItem("songs_final2", JSON.stringify(normalized));
 
     if (bandCode === CORRECT_CODE) {
       try {
         await db.collection("bands").doc(bandCode).set({
-          songs: updatedSongs,
+          songs: normalized,
           updatedAt: serverTimestamp()
         });
       } catch (e) {
@@ -101,7 +307,7 @@ function App() {
     }
 
     if (updated) {
-      setCurrentSong(updatedSongs.find(s => s.id === updated.id));
+      setCurrentSong(normalized.find(s => s.id === updated.id));
     }
   };
 
@@ -112,7 +318,8 @@ function App() {
       name: newSongName.trim(),
       sections: [
         { name: "1 2 3 4", bars: 2, intro: true }
-      ]
+      ],
+      pattern: createEmptyPatternForSong(),
     };
     save([...songs, song]);
     setNewSongName("");
@@ -123,6 +330,8 @@ function App() {
     setCurrentSong(song);
     setCurrentBeat(1);
     setCurrentBar(0);
+    setCurrentPatternStep(0);
+    setShowPatternEditor(false);
   };
 
   const deleteSong = (id) => {
@@ -153,6 +362,37 @@ function App() {
     const updated = songs.map(s =>
       s.id === currentSong.id
         ? { ...s, sections: s.sections.filter((_, idx) => idx !== i) }
+        : s
+    );
+    save(updated);
+  };
+
+  const togglePatternStep = (trackId, stepIdx) => {
+    if (!currentSong) return;
+    const updated = songs.map(s => {
+      if (s.id !== currentSong.id) return s;
+      const updatedPattern = {
+        ...s.pattern,
+        tracks: s.pattern.tracks.map(track => {
+          if (track.id !== trackId) return track;
+          return {
+            ...track,
+            steps: track.steps.map((value, idx) =>
+              idx === stepIdx ? !value : value
+            ),
+          };
+        }),
+      };
+      return { ...s, pattern: updatedPattern };
+    });
+    save(updated);
+  };
+
+  const clearPattern = () => {
+    if (!currentSong) return;
+    const updated = songs.map(s =>
+      s.id === currentSong.id
+        ? { ...s, pattern: createEmptyPatternForSong() }
         : s
     );
     save(updated);
@@ -208,6 +448,35 @@ function App() {
     gain.gain.exponentialRampToValueAtTime(0.001, time + 0.08);
     osc.stop(time + 0.08);
   };
+
+  const playInstrumentSound = (instrumentId, time) => {
+    const ctx = audioContextRef.current;
+    if (!ctx) return;
+
+    const buffer = sampleBufferRef.current[instrumentId];
+    if (buffer) {
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(ctx.destination);
+      source.start(time);
+      return;
+    }
+
+    ensureSampleBuffer(instrumentId);
+
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    osc.type = "triangle";
+    osc.frequency.value = instrumentFrequencyMap[instrumentId] || 220;
+    gain.gain.value = 1;
+
+    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.12);
+    osc.start(time);
+    osc.stop(time + 0.12);
+  };
 // ФУНКЦИЯ ШЕДУЛЕР
  const schedule = () => {
   const ct = audioContextRef.current.currentTime;
@@ -217,16 +486,32 @@ function App() {
     const scheduledTime = nextNoteTimeRef.current;
     const currentBeatValue = beatRef.current;
     const currentBarValue = barRef.current;
+    const pattern = currentSong?.pattern;
+    const patternLength = pattern?.steps || PATTERN_STEPS;
+    const totalBeatsPassed =
+      currentBarValue * beatsPerBar + (currentBeatValue - 1);
+    const patternStepIndex =
+      patternLength > 0 ? totalBeatsPassed % patternLength : 0;
+    const usePatternSounds = pattern && patternHasActiveSteps(pattern);
 
     visualQueueRef.current.push({
       time: scheduledTime,
       type: "beat",
       beat: currentBeatValue,
       bar: currentBarValue,
+      patternStep: patternStepIndex,
     });
     
     // Планируем звук
-    clickSound(scheduledTime, currentBeatValue === 1);
+    if (usePatternSounds) {
+      pattern.tracks.forEach(track => {
+        if (track.steps[patternStepIndex]) {
+          playInstrumentSound(track.id, scheduledTime);
+        }
+      });
+    } else {
+      clickSound(scheduledTime, currentBeatValue === 1);
+    }
 
     nextNoteTimeRef.current += 60 / bpm;
 
@@ -247,15 +532,30 @@ function App() {
 // КОНЕЦ ШЕДУЛЕРА
 
   //СТАРТ
-  const start = () => {
+  const changeBpm = (delta) => {
+    setBpm(prev => {
+      const next = prev + delta;
+      return Math.max(MIN_BPM, Math.min(MAX_BPM, next));
+    });
+  };
+
+  const start = async () => {
     if (!currentSong) return;
     if (!audioContextRef.current)
       audioContextRef.current = new AudioContext();
+    try {
+      await Promise.all(
+        PATTERN_INSTRUMENTS.map(inst => ensureSampleBuffer(inst.id))
+      );
+    } catch (err) {
+      console.warn("Sample warmup failed:", err);
+    }
     setIsPlaying(true);
     beatRef.current = 1;
     barRef.current = 0;
     setCurrentBeat(1);
     setCurrentBar(0);
+    setCurrentPatternStep(0);
     visualQueueRef.current = [];
     nextNoteTimeRef.current = audioContextRef.current.currentTime;
     schedule();
@@ -273,6 +573,7 @@ function App() {
       visualRafRef.current = null;
     }
     visualQueueRef.current = [];
+    setCurrentPatternStep(0);
   };
 
   useEffect(() => {
@@ -291,6 +592,7 @@ function App() {
         if (event.type === "stop") {
           setCurrentBeat(1);
           setCurrentBar(0);
+          setCurrentPatternStep(0);
           setIsPlaying(false);
           if (timerRef.current) {
             clearTimeout(timerRef.current);
@@ -306,6 +608,9 @@ function App() {
 
         setCurrentBeat(event.beat);
         setCurrentBar(event.bar);
+        if (typeof event.patternStep === "number") {
+          setCurrentPatternStep(event.patternStep);
+        }
       }
 
       visualRafRef.current = requestAnimationFrame(processVisuals);
@@ -348,7 +653,26 @@ function App() {
     }
   }, [currentBar, isPlaying]);
 
+  useEffect(() => {
+    if (!currentSong) {
+      setShowPatternEditor(false);
+    }
+  }, [currentSong]);
+
   // ====== UI RENDER ======
+  if (showPatternEditor && PatternEditor && currentSong) {
+    return (
+      <PatternEditor
+        songName={currentSong.name}
+        pattern={currentSong.pattern}
+        currentStep={isPlaying ? currentPatternStep : -1}
+        onToggleStep={togglePatternStep}
+        onClear={clearPattern}
+        onClose={() => setShowPatternEditor(false)}
+      />
+    );
+  }
+
   // Если код не введён или неверный — показываем форму
   if (bandCode !== CORRECT_CODE) {
     return (
@@ -461,35 +785,35 @@ function App() {
                   )}
 
                  
-{/* ✅ Визуал блоков */}
-<div className="grid grid-cols-4 gap-1">
-  {Array.from({ length: sec.bars * 4 }).map((_, idx) => {
-    const barNum = range.start + Math.floor(idx / 4);
-    const localBeat = (idx % 4) + 1;
-    const absClick = barNum * 4 + (localBeat - 1);
-    const currentAbs = currentBar * 4 + currentBeat - 1;
-    const isCurrent = absClick === currentAbs;
-    const isFilled = absClick <= currentAbs;
-    const isFirstBeat = localBeat === 1;
+              {/* ✅ Визуал блоков */}
+              <div className="grid grid-cols-4 gap-1">
+                {Array.from({ length: sec.bars * 4 }).map((_, idx) => {
+                  const barNum = range.start + Math.floor(idx / 4);
+                  const localBeat = (idx % 4) + 1;
+                  const absClick = barNum * 4 + (localBeat - 1);
+                  const currentAbs = currentBar * 4 + currentBeat - 1;
+                  const isCurrent = absClick === currentAbs;
+                  const isFilled = absClick <= currentAbs;
+                  const isFirstBeat = localBeat === 1;
 
-    return (
-      <div
-        key={idx}
-        className={`
-          h-5 rounded-md transition-all duration-100
-          ${isFilled
-            ? isCurrent
-              ? 'bg-yellow-400/80 shadow-[0_0_10px_rgba(255,255,0,0.7)]'
-              : 'bg-green-500/70'
-            : isFirstBeat
-              ? 'bg-white/30 border-2 border-white/50'
-              : 'bg-white/15'
-          }
-        `}
-      ></div>
-    );
-  })}
-</div>
+                  return (
+                    <div
+                      key={idx}
+                      className={`
+                        h-5 rounded-md transition-all duration-100
+                        ${isFilled
+                          ? isCurrent
+                            ? 'bg-yellow-400/80 shadow-[0_0_10px_rgba(255,255,0,0.7)]'
+                            : 'bg-green-500/70'
+                          : isFirstBeat
+                            ? 'bg-white/30 border-2 border-white/50'
+                            : 'bg-white/15'
+                        }
+                      `}
+                    ></div>
+                  );
+                })}
+              </div>
 
 
                 </div>
@@ -514,13 +838,39 @@ function App() {
                   {sectionTypes.map(t => <option key={t}>{t}</option>)}
                 </select>
 
-                <input
-                  type="number"
-                  value={newSection.bars}
-                  onChange={(e) => setNewSection({ ...newSection, bars: +e.target.value })}
-                  className="w-full px-3 py-2 text-white bg-white/10 rounded-lg border border-white/20 text-center"
-                  min={1}
-                />
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    className="px-3 py-2 bg-white/10 rounded-lg border border-white/20"
+                    onClick={() =>
+                      setNewSection(prev => ({
+                        ...prev,
+                        bars: Math.max(1, (prev.bars || 1) - 1),
+                      }))
+                    }
+                  >
+                    −
+                  </button>
+                  <input
+                    type="number"
+                    value={newSection.bars}
+                    onChange={(e) => setNewSection({ ...newSection, bars: Math.max(1, +e.target.value) })}
+                    className="flex-1 px-3 py-2 text-white bg-white/10 rounded-lg border border-white/20 text-center appearance-none focus:outline-none"
+                    min={1}
+                  />
+                  <button
+                    type="button"
+                    className="px-3 py-2 bg-white/10 rounded-lg border border-white/20"
+                    onClick={() =>
+                      setNewSection(prev => ({
+                        ...prev,
+                        bars: Math.max(1, (prev.bars || 1) + 1),
+                      }))
+                    }
+                  >
+                    +
+                  </button>
+                </div>
 
                 <input
                   type="text"
@@ -551,12 +901,51 @@ function App() {
           <label className="block opacity-80 mb-1">Tempo: {bpm} BPM</label>
           <input
             type="range"
-            min="40"
-            max="240"
+            min={MIN_BPM}
+            max={MAX_BPM}
             value={bpm}
             onChange={(e) => setBpm(+e.target.value)}
             className="w-full mb-2"
           />
+          <div className="flex flex-col gap-2 mb-4">
+            <div className="grid grid-cols-4 gap-2">
+              <button
+                className="py-2 bg-white/10 rounded-lg border border-white/20"
+                onClick={() => changeBpm(-10)}
+              >
+                −10
+              </button>
+              <button
+                className="py-2 bg-white/10 rounded-lg border border-white/20"
+                onClick={() => changeBpm(-1)}
+              >
+                −1
+              </button>
+              <button
+                className="py-2 bg-white/10 rounded-lg border border-white/20"
+                onClick={() => changeBpm(1)}
+              >
+                +1
+              </button>
+              <button
+                className="py-2 bg-white/10 rounded-lg border border-white/20"
+                onClick={() => changeBpm(10)}
+              >
+                +10
+              </button>
+            </div>
+            <button
+              onClick={() => PatternEditor && setShowPatternEditor(true)}
+              disabled={!PatternEditor}
+              className={`w-full py-2 rounded-lg font-bold transition ${
+                PatternEditor
+                  ? "bg-purple-600 hover:bg-purple-500"
+                  : "bg-white/10 cursor-not-allowed opacity-60"
+              }`}
+            >
+              Свой паттерн
+            </button>
+          </div>
 
           <div className="h-24" />
         </div>
