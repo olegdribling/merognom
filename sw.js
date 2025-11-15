@@ -8,7 +8,7 @@ const FILES = [
   "./icon-192.png",
   "./icon-512.png",
   "./sound/Real Drum Kit/BD.wav",
-  "./sound/Real Drum Kit/SN.wav",
+  "./sound/Real Drum Kit/SD.wav",
   "./sound/Real Drum Kit/HH.wav"
 ];
 
