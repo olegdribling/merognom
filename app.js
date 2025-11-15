@@ -1,7 +1,7 @@
 // ✅ FULL UPDATED FILE — Group code gate + realtime Firestore sync
 const { useState, useRef, useEffect } = React;
 
-const APP_VERSION = "2025.11.17";
+const APP_VERSION = "2025.11.18";
 const VERSION_KEY = "app_version";
 const RELOAD_FLAG = "app_version_reloading";
 
@@ -224,18 +224,13 @@ function App() {
 
   useEffect(() => {
     if (patternEditorReady) return;
-    let active = true;
-    const check = () => {
-      if (!active) return;
-      if (window.PatternEditor) {
-        setPatternEditorReady(true);
-      } else {
-        setTimeout(check, 100);
-      }
-    };
-    check();
+    const readyHandler = () => setPatternEditorReady(true);
+    document.addEventListener("pattern-editor-ready", readyHandler);
+    if (window.PatternEditor) {
+      setPatternEditorReady(true);
+    }
     return () => {
-      active = false;
+      document.removeEventListener("pattern-editor-ready", readyHandler);
     };
   }, [patternEditorReady]);
 
