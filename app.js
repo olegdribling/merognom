@@ -1,7 +1,7 @@
 // ✅ FULL UPDATED FILE — Group code gate + realtime Firestore sync
 const { useState, useRef, useEffect } = React;
 
-const APP_VERSION = "2025.11.16";
+const APP_VERSION = "2024.12.20";
 const VERSION_KEY = "app_version";
 const RELOAD_FLAG = "app_version_reloading";
 
@@ -20,7 +20,7 @@ const PATTERN_INSTRUMENTS = patternGlobals.PATTERN_INSTRUMENTS || [
     label: "SD",
     color: "#facc15",
     freq: 220,
-    sample: `${SAMPLES_BASE}/SN.wav`,
+    sample: `${SAMPLES_BASE}/SD.wav`,
   },
   {
     id: "hh",
@@ -490,26 +490,39 @@ function App() {
     const patternLength = pattern?.steps || PATTERN_STEPS;
     const totalBeatsPassed =
       currentBarValue * beatsPerBar + (currentBeatValue - 1);
-    const patternStepIndex =
-      patternLength > 0 ? totalBeatsPassed % patternLength : 0;
     const usePatternSounds = pattern && patternHasActiveSteps(pattern);
 
-    visualQueueRef.current.push({
-      time: scheduledTime,
-      type: "beat",
-      beat: currentBeatValue,
-      bar: currentBarValue,
-      patternStep: patternStepIndex,
-    });
-    
-    // Планируем звук
-    if (usePatternSounds) {
-      pattern.tracks.forEach(track => {
-        if (track.steps[patternStepIndex]) {
-          playInstrumentSound(track.id, scheduledTime);
-        }
-      });
+    if (usePatternSounds && patternLength > 0) {
+      const subDiv = 2;
+      const subDuration = (60 / bpm) / subDiv;
+      const baseStep = Math.floor(totalBeatsPassed * subDiv);
+
+      for (let sub = 0; sub < subDiv; sub++) {
+        const subTime = scheduledTime + sub * subDuration;
+        const stepIndex = (baseStep + sub) % patternLength;
+
+        pattern.tracks.forEach(track => {
+          if (track.steps[stepIndex]) {
+            playInstrumentSound(track.id, subTime);
+          }
+        });
+
+        visualQueueRef.current.push({
+          time: subTime,
+          type: "beat",
+          beat: currentBeatValue,
+          bar: currentBarValue,
+          patternStep: stepIndex,
+        });
+      }
     } else {
+      visualQueueRef.current.push({
+        time: scheduledTime,
+        type: "beat",
+        beat: currentBeatValue,
+        bar: currentBarValue,
+        patternStep: 0,
+      });
       clickSound(scheduledTime, currentBeatValue === 1);
     }
 
