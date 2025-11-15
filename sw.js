@@ -1,11 +1,15 @@
-const CACHE = "metrognom-cache-v1";
+const CACHE = "metrognom-cache-v2";
 const FILES = [
   "./",
   "./index.html",
   "./app.js",
+  "./patternEditor.js",
   "./manifest.json",
-  "./icons/icon-192.png",
-  "./icons/icon-512.png"
+  "./icon-192.png",
+  "./icon-512.png",
+  "./sound/Real Drum Kit/BD.wav",
+  "./sound/Real Drum Kit/SN.wav",
+  "./sound/Real Drum Kit/HH.wav"
 ];
 
 // Install
@@ -21,4 +25,3 @@ self.addEventListener("fetch", e => {
     caches.match(e.request).then(res => res || fetch(e.request))
   );
 });
-
