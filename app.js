@@ -1,7 +1,7 @@
 // ✅ FULL UPDATED FILE — Group code gate + realtime Firestore sync
 const { useState, useRef, useEffect } = React;
 
-const APP_VERSION = "2025.11.16";
+const APP_VERSION = "2025.11.17";
 const VERSION_KEY = "app_version";
 const RELOAD_FLAG = "app_version_reloading";
 
@@ -45,8 +45,6 @@ const createPatternBase =
           steps: Array(PATTERN_STEPS).fill(false),
         })),
       });
-const PatternEditor = window.PatternEditor;
-
 const instrumentMetaById = PATTERN_INSTRUMENTS.reduce((acc, inst) => {
   acc[inst.id] = inst;
   return acc;
@@ -135,6 +133,7 @@ function App() {
   const [currentBar, setCurrentBar] = useState(0);
   const [currentPatternStep, setCurrentPatternStep] = useState(0);
   const [showPatternEditor, setShowPatternEditor] = useState(false);
+  const [patternEditorReady, setPatternEditorReady] = useState(() => Boolean(window.PatternEditor));
 
   const beatsPerBar = 4;
   const MIN_BPM = 40;
@@ -222,6 +221,23 @@ function App() {
       }
     });
   }, []);
+
+  useEffect(() => {
+    if (patternEditorReady) return;
+    let active = true;
+    const check = () => {
+      if (!active) return;
+      if (window.PatternEditor) {
+        setPatternEditorReady(true);
+      } else {
+        setTimeout(check, 100);
+      }
+    };
+    check();
+    return () => {
+      active = false;
+    };
+  }, [patternEditorReady]);
 
   // ====== FIRESTORE REALTIME SYNC ======
   // Слушатель облака (включается только при верном коде)
@@ -673,9 +689,11 @@ function App() {
   }, [currentSong]);
 
   // ====== UI RENDER ======
-  if (showPatternEditor && PatternEditor && currentSong) {
+  const PatternEditorComponent = patternEditorReady ? window.PatternEditor : null;
+
+  if (showPatternEditor && PatternEditorComponent && currentSong) {
     return (
-      <PatternEditor
+      <PatternEditorComponent
         songName={currentSong.name}
         pattern={currentSong.pattern}
         currentStep={isPlaying ? currentPatternStep : -1}
@@ -948,10 +966,10 @@ function App() {
               </button>
             </div>
             <button
-              onClick={() => PatternEditor && setShowPatternEditor(true)}
-              disabled={!PatternEditor}
+              onClick={() => PatternEditorComponent && setShowPatternEditor(true)}
+              disabled={!PatternEditorComponent}
               className={`w-full py-2 rounded-lg font-bold transition ${
-                PatternEditor
+                PatternEditorComponent
                   ? "bg-purple-600 hover:bg-purple-500"
                   : "bg-white/10 cursor-not-allowed opacity-60"
               }`}
