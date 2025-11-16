@@ -1,7 +1,7 @@
 // ✅ OPTIMIZED & SECURE VERSION
 const { useState, useRef, useEffect, useCallback } = React;
 
-const APP_VERSION = "2025.12.25";
+const APP_VERSION = "2024.12.23";
 const VERSION_KEY = "app_version";
 const RELOAD_FLAG = "app_version_reloading";
 
@@ -426,6 +426,15 @@ function App() {
   };
 
   const deleteSong = (id) => {
+    const song = songs.find(s => s.id === id);
+    if (!song) return;
+    
+    const confirmed = window.confirm(
+      `Удалить песню "${song.name}"?\n\nЭто действие нельзя отменить.`
+    );
+    
+    if (!confirmed) return;
+    
     const updated = songs.filter(s => s.id !== id);
     save(updated, currentSong?.id === id ? null : currentSong);
   };
@@ -862,7 +871,7 @@ function App() {
               disabled={!newSongName.trim()}
               className="w-full p-3 rounded-xl bg-green-600 font-bold hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed transition"
             >
-              Add song
+              ➕ Add song
             </button>
           </div>
 
@@ -987,7 +996,7 @@ function App() {
                 onClick={() => setShowAddForm(true)}
                 className="w-full py-3 mt-2 bg-blue-500 hover:bg-blue-400 rounded-lg font-bold transition"
               >
-                Add Section
+                ➕ Add Section
               </button>
             ) : (
               <div className="p-3 rounded-xl bg-white/10 border border-white/20 space-y-3">
@@ -1109,7 +1118,7 @@ function App() {
                   : "bg-white/10 cursor-not-allowed opacity-60"
               }`}
             >
-              {samplesLoaded ? "Свой паттерн" : "⏳ Загрузка сэмплов..."}
+              {samplesLoaded ? "🎵 Свой паттерн" : "⏳ Загрузка сэмплов..."}
             </button>
           </div>
 
@@ -1125,14 +1134,14 @@ function App() {
                 onClick={start} 
                 className="w-full py-4 bg-green-600 hover:bg-green-500 rounded-xl text-xl font-bold shadow-2xl transition active:scale-95"
               >
-                START
+                ▶ START
               </button>
             ) : (
               <button 
                 onClick={stop} 
                 className="w-full py-4 bg-red-600 hover:bg-red-500 rounded-xl text-xl font-bold shadow-2xl transition active:scale-95"
               >
-                STOP
+                ⏹ STOP
               </button>
             )}
           </div>
