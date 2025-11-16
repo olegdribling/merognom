@@ -1,7 +1,7 @@
 // ✅ FULL UPDATED FILE — Group code gate + realtime Firestore sync
 const { useState, useRef, useEffect } = React;
 
-const APP_VERSION = "2024.12.20";
+const APP_VERSION = "2024.12.22";
 const VERSION_KEY = "app_version";
 const RELOAD_FLAG = "app_version_reloading";
 
@@ -20,7 +20,7 @@ const PATTERN_INSTRUMENTS = patternGlobals.PATTERN_INSTRUMENTS || [
     label: "SD",
     color: "#facc15",
     freq: 220,
-    sample: `${SAMPLES_BASE}/SD.wav`,
+    sample: `${SAMPLES_BASE}/SN.wav`,
   },
   {
     id: "hh",
