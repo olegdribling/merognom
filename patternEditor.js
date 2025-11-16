@@ -15,7 +15,7 @@ const PATTERN_INSTRUMENTS = [
     label: "SD",
     color: "#facc15",
     freq: 220,
-    sample: `${SAMPLES_BASE}/SD.wav`,
+    sample: `${SAMPLES_BASE}/SN.wav`,
   },
   {
     id: "hh",
