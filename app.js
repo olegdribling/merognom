@@ -497,9 +497,14 @@ function App() {
     save(updated);
   };
 
-  // ====== DRAG & DROP ======
+  // ====== DRAG & DROP (Desktop + Mobile) ======
   const dragSongFrom = useRef(null);
+  const touchStartY = useRef(null);
+  const draggedElement = useRef(null);
+  
   const allow = (e) => e.preventDefault();
+  
+  // Desktop drag
   const songDragStart = (i) => () => (dragSongFrom.current = i);
   const songDrop = (to) => (e) => {
     e.preventDefault();
@@ -512,10 +517,72 @@ function App() {
     dragSongFrom.current = null;
   };
 
+  // Mobile touch
+  const songTouchStart = (i) => (e) => {
+    dragSongFrom.current = i;
+    touchStartY.current = e.touches[0].clientY;
+    draggedElement.current = e.currentTarget;
+    draggedElement.current.style.opacity = '0.5';
+  };
+
+  const songTouchMove = (e) => {
+    if (dragSongFrom.current == null) return;
+    e.preventDefault();
+    const touch = e.touches[0];
+    const element = document.elementFromPoint(touch.clientX, touch.clientY);
+    
+    // Найти индекс элемента под пальцем
+    const songItems = document.querySelectorAll('[data-song-index]');
+    songItems.forEach((item, idx) => {
+      if (item.contains(element) && idx !== dragSongFrom.current) {
+        item.style.borderTop = '3px solid #60a5fa';
+      } else {
+        item.style.borderTop = '';
+      }
+    });
+  };
+
+  const songTouchEnd = (e) => {
+    if (dragSongFrom.current == null) return;
+    
+    const touch = e.changedTouches[0];
+    const element = document.elementFromPoint(touch.clientX, touch.clientY);
+    
+    // Найти индекс drop target
+    const songItems = document.querySelectorAll('[data-song-index]');
+    let dropIndex = null;
+    songItems.forEach((item, idx) => {
+      item.style.borderTop = '';
+      if (item.contains(element)) {
+        dropIndex = idx;
+      }
+    });
+
+    if (dropIndex != null && dropIndex !== dragSongFrom.current) {
+      const reordered = [...songs];
+      const [moved] = reordered.splice(dragSongFrom.current, 1);
+      reordered.splice(dropIndex, 0, moved);
+      save(reordered);
+    }
+
+    if (draggedElement.current) {
+      draggedElement.current.style.opacity = '1';
+    }
+    
+    dragSongFrom.current = null;
+    touchStartY.current = null;
+    draggedElement.current = null;
+  };
+
+  // Sections drag & drop
   const dragFrom = useRef(null);
+  const sectionTouchStartY = useRef(null);
+  const draggedSection = useRef(null);
+
   const sectionDragStart = (i) => () => {
     if (!currentSong.sections[i].intro) dragFrom.current = i;
   };
+  
   const sectionDrop = (to) => (e) => {
     e.preventDefault();
     const from = dragFrom.current;
@@ -530,6 +597,67 @@ function App() {
     });
     save(updated);
     dragFrom.current = null;
+  };
+
+  // Mobile touch for sections
+  const sectionTouchStart = (i) => (e) => {
+    if (currentSong.sections[i].intro) return;
+    dragFrom.current = i;
+    sectionTouchStartY.current = e.touches[0].clientY;
+    draggedSection.current = e.currentTarget;
+    draggedSection.current.style.opacity = '0.5';
+  };
+
+  const sectionTouchMove = (e) => {
+    if (dragFrom.current == null) return;
+    e.preventDefault();
+    const touch = e.touches[0];
+    const element = document.elementFromPoint(touch.clientX, touch.clientY);
+    
+    const sectionItems = document.querySelectorAll('[data-section-index]');
+    sectionItems.forEach((item, idx) => {
+      const isIntro = currentSong.sections[idx]?.intro;
+      if (item.contains(element) && idx !== dragFrom.current && !isIntro) {
+        item.style.borderTop = '3px solid #60a5fa';
+      } else {
+        item.style.borderTop = '';
+      }
+    });
+  };
+
+  const sectionTouchEnd = (e) => {
+    if (dragFrom.current == null) return;
+    
+    const touch = e.changedTouches[0];
+    const element = document.elementFromPoint(touch.clientX, touch.clientY);
+    
+    const sectionItems = document.querySelectorAll('[data-section-index]');
+    let dropIndex = null;
+    sectionItems.forEach((item, idx) => {
+      item.style.borderTop = '';
+      if (item.contains(element) && !currentSong.sections[idx]?.intro) {
+        dropIndex = idx;
+      }
+    });
+
+    if (dropIndex != null && dropIndex !== dragFrom.current) {
+      const updated = songs.map(s => {
+        if (s.id !== currentSong.id) return s;
+        const arr = [...s.sections];
+        const [moved] = arr.splice(dragFrom.current, 1);
+        arr.splice(dropIndex, 0, moved);
+        return { ...s, sections: arr };
+      });
+      save(updated);
+    }
+
+    if (draggedSection.current) {
+      draggedSection.current.style.opacity = '1';
+    }
+    
+    dragFrom.current = null;
+    sectionTouchStartY.current = null;
+    draggedSection.current = null;
   };
 
   // ====== AUDIO PLAYBACK ======
@@ -885,13 +1013,17 @@ function App() {
           {songs.map((song, i) => (
             <div
               key={song.id}
+              data-song-index={i}
               className="flex gap-2 w-full max-w-xl mb-2"
               draggable
               onDragStart={songDragStart(i)}
               onDragOver={allow}
               onDrop={songDrop(i)}
+              onTouchStart={songTouchStart(i)}
+              onTouchMove={songTouchMove}
+              onTouchEnd={songTouchEnd}
             >
-              <span className="cursor-grab select-none text-white/50 flex items-center">↕</span>
+              <span className="cursor-grab select-none text-white/50 flex items-center touch-none">↕</span>
               <button 
                 onClick={() => selectSong(song)} 
                 className="flex-1 p-3 bg-white/10 hover:bg-white/20 rounded-xl transition text-left"
@@ -930,11 +1062,15 @@ function App() {
               return (
                 <div
                   key={i}
+                  data-section-index={i}
                   ref={isCurrentSection ? currentSectionRef : null}
                   draggable={!isIntro}
                   onDragStart={sectionDragStart(i)}
                   onDragOver={allow}
                   onDrop={sectionDrop(i)}
+                  onTouchStart={sectionTouchStart(i)}
+                  onTouchMove={sectionTouchMove}
+                  onTouchEnd={sectionTouchEnd}
                   className={`p-3 rounded-2xl border transition-all ${
                     isCurrentSection
                       ? "border-yellow-300 bg-yellow-200/20 shadow-[0_0_20px_rgba(255,255,0,0.7)]"
@@ -942,7 +1078,7 @@ function App() {
                   }`}
                 >
                   <div className="flex items-center gap-2 mb-2">
-                    {!isIntro && <span className="px-1 cursor-grab select-none text-white/70">↕</span>}
+                    {!isIntro && <span className="px-1 cursor-grab select-none text-white/70 touch-none">↕</span>}
                     <span className="font-bold">{sec.name}</span>
                     <span className="opacity-80 text-sm">{sec.bars} bars</span>
                     {!isIntro && (
