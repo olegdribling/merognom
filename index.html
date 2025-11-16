@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <title>Metronome PWA</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="manifest" href="manifest.json" />
 
   <!-- Tailwind -->
   <script src="https://cdn.tailwindcss.com"></script>
@@ -34,13 +35,25 @@
     window.db = firebase.firestore();
     window.serverTimestamp = firebase.firestore.FieldValue.serverTimestamp;
   </script>
- 
+<script src="PatternEditor.js"></script>
 </head>
 
 <body class="bg-gray-900">
   <div id="root"></div>
-  <script src="PatternEditor.js"></script>
+
+  <!-- Компонент редактора паттерна -->
+  <script type="text/babel" src="patternEditor.js"></script>
+
   <!-- Наш основной код -->
   <script type="text/babel" src="app.js"></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("sw.js").catch((err) => {
+          console.warn("Service worker registration failed:", err);
+        });
+      });
+    }
+  </script>
 </body>
 </html>
