@@ -1,7 +1,7 @@
 // ✅ OPTIMIZED VERSION — Исправлены все ошибки и улучшена производительность
 const { useState, useRef, useEffect, useMemo, useCallback } = React;
 
-const APP_VERSION = "2024.12.22";
+const APP_VERSION = "2024.12.29";
 const VERSION_KEY = "app_version";
 const RELOAD_FLAG = "app_version_reloading";
 
