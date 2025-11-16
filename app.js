@@ -1,7 +1,7 @@
 // ✅ OPTIMIZED VERSION — Исправлены все ошибки и улучшена производительность
 const { useState, useRef, useEffect, useMemo, useCallback } = React;
 
-const APP_VERSION = "2024.12.21";
+const APP_VERSION = "2024.12.22";
 const VERSION_KEY = "app_version";
 const RELOAD_FLAG = "app_version_reloading";
 
@@ -789,11 +789,11 @@ function App() {
   }, [currentSong]);
 
   // ====== UI RENDER ======
-  const PatternEditorComponent = patternEditorReady ? window.PatternEditor : null;
+  const PatternEditor = window.PatternEditor;
 
-  if (showPatternEditor && PatternEditorComponent && currentSong) {
+  if (showPatternEditor && PatternEditor && currentSong) {
     return (
-      <PatternEditorComponent
+      <PatternEditor
         songName={currentSong.name}
         pattern={currentSong.pattern}
         currentStep={isPlaying ? currentPatternStep : -1}
@@ -1070,7 +1070,7 @@ function App() {
                   : "bg-white/10 cursor-not-allowed opacity-60"
               }`}
             >
-              {PatternEditorComponent ? "Свой паттерн" : "⏳ Загрузка редактора..."}
+              {PatternEditorComponent ? "🎹 Свой паттерн" : "⏳ Загрузка редактора..."}
             </button>
             {!PatternEditorComponent && (
               <div className="text-xs text-center text-yellow-300">
@@ -1088,11 +1088,11 @@ function App() {
           <div className="max-w-xl mx-auto px-6 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-3">
             {!isPlaying ? (
               <button onClick={start} className="w-full py-4 bg-green-600 rounded-xl text-xl font-bold shadow-2xl min-h-[44px]">
-                START
+                ▶ START
               </button>
             ) : (
               <button onClick={stop} className="w-full py-4 bg-red-600 rounded-xl text-xl font-bold shadow-2xl min-h-[44px]">
-                STOP
+                ⏹ STOP
               </button>
             )}
           </div>
