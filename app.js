@@ -1,7 +1,7 @@
-// ✅ FULL UPDATED FILE — Group code gate + realtime Firestore sync
-const { useState, useRef, useEffect } = React;
+// ✅ OPTIMIZED VERSION — Исправлены все ошибки и улучшена производительность
+const { useState, useRef, useEffect, useMemo, useCallback } = React;
 
-const APP_VERSION = "2025.11.18";
+const APP_VERSION = "2024.12.21";
 const VERSION_KEY = "app_version";
 const RELOAD_FLAG = "app_version_reloading";
 
@@ -94,9 +94,9 @@ function App() {
   const [codeError, setCodeError] = useState("");
   const [bandCode, setBandCode] = useState(() => localStorage.getItem("band_code") || "");
 
-  const CORRECT_CODE = "0000"; // <- общий код группы
+  const CORRECT_CODE = "0000";
 
-  const handleSubmitCode = () => {
+  const handleSubmitCode = useCallback(() => {
     if (bandCodeInput.trim() === CORRECT_CODE) {
       localStorage.setItem("band_code", CORRECT_CODE);
       setBandCode(CORRECT_CODE);
@@ -104,14 +104,14 @@ function App() {
     } else {
       setCodeError("Неверный код. Попробуйте ещё раз.");
     }
-  };
+  }, [bandCodeInput, CORRECT_CODE]);
 
-  const resetCode = () => {
+  const resetCode = useCallback(() => {
     localStorage.removeItem("band_code");
     setBandCode("");
     setBandCodeInput("");
     setCodeError("");
-  };
+  }, []);
 
   // ====== SONGS STATE ======
   const [songs, setSongs] = useState(() => {
@@ -134,6 +134,7 @@ function App() {
   const [currentPatternStep, setCurrentPatternStep] = useState(0);
   const [showPatternEditor, setShowPatternEditor] = useState(false);
   const [patternEditorReady, setPatternEditorReady] = useState(() => Boolean(window.PatternEditor));
+  const [audioUnlocked, setAudioUnlocked] = useState(false);
 
   const beatsPerBar = 4;
   const MIN_BPM = 40;
@@ -150,10 +151,18 @@ function App() {
   const sampleBufferRef = useRef({});
   const sampleFetchPromisesRef = useRef({});
   const sampleDecodePromisesRef = useRef({});
+  const isPlayingRef = useRef(false);
 
-  const totalBars = song => song ? song.sections.reduce((s, sec) => s + sec.bars, 0) : 0;
+  // ✅ Синхронизация ref с state
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
 
-  const fetchSampleData = (instrumentId) => {
+  const totalBars = useCallback((song) => 
+    song ? song.sections.reduce((s, sec) => s + sec.bars, 0) : 0
+  , []);
+
+  const fetchSampleData = useCallback((instrumentId) => {
     if (sampleDataRef.current[instrumentId]) {
       return Promise.resolve(sampleDataRef.current[instrumentId]);
     }
@@ -180,9 +189,9 @@ function App() {
       });
     sampleFetchPromisesRef.current[instrumentId] = promise;
     return promise;
-  };
+  }, []);
 
-  const ensureSampleBuffer = async (instrumentId) => {
+  const ensureSampleBuffer = useCallback(async (instrumentId) => {
     if (sampleBufferRef.current[instrumentId]) {
       return sampleBufferRef.current[instrumentId];
     }
@@ -212,30 +221,55 @@ function App() {
 
     sampleDecodePromisesRef.current[instrumentId] = decodePromise;
     return decodePromise;
-  };
+  }, [fetchSampleData]);
 
+  // ✅ Предзагрузка сэмплов
   useEffect(() => {
     PATTERN_INSTRUMENTS.forEach(inst => {
       if (inst.sample) {
         fetchSampleData(inst.id);
       }
     });
-  }, []);
+  }, [fetchSampleData]);
 
+  // ✅ Проверка PatternEditor с отладкой
   useEffect(() => {
     if (patternEditorReady) return;
-    const readyHandler = () => setPatternEditorReady(true);
+    
+    console.log('🔍 Checking PatternEditor availability:', {
+      available: !!window.PatternEditor,
+      type: typeof window.PatternEditor
+    });
+    
+    const readyHandler = () => {
+      console.log('✅ PatternEditor ready event fired');
+      setPatternEditorReady(true);
+    };
+    
     document.addEventListener("pattern-editor-ready", readyHandler);
+    
     if (window.PatternEditor) {
+      console.log('✅ PatternEditor found immediately');
       setPatternEditorReady(true);
     }
+    
+    // Повторная проверка через 1 секунду
+    const timer = setTimeout(() => {
+      if (window.PatternEditor && !patternEditorReady) {
+        console.log('✅ PatternEditor found after delay');
+        setPatternEditorReady(true);
+      } else if (!window.PatternEditor) {
+        console.warn('⚠️ PatternEditor not found after 1s');
+      }
+    }, 1000);
+    
     return () => {
+      clearTimeout(timer);
       document.removeEventListener("pattern-editor-ready", readyHandler);
     };
   }, [patternEditorReady]);
 
   // ====== FIRESTORE REALTIME SYNC ======
-  // Слушатель облака (включается только при верном коде)
   useEffect(() => {
     const storedVersion = localStorage.getItem(VERSION_KEY);
     if (storedVersion === APP_VERSION) {
@@ -274,9 +308,29 @@ function App() {
     cleanupCaches();
   }, []);
 
+  // ✅ Firestore с обработкой офлайн режима
   useEffect(() => {
     if (bandCode !== CORRECT_CODE) return;
+    if (typeof db === 'undefined') {
+      console.warn('⚠️ Firebase not initialized');
+      return;
+    }
+    
     const docRef = db.collection("bands").doc(bandCode);
+    let isOnline = navigator.onLine;
+
+    const handleOnline = () => {
+      console.log('🌐 Back online');
+      isOnline = true;
+    };
+    
+    const handleOffline = () => {
+      console.warn('📵 Offline mode - sync paused');
+      isOnline = false;
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
 
     const unsub = docRef.onSnapshot((doc) => {
       const data = doc.data();
@@ -289,24 +343,22 @@ function App() {
           return normalized.find(s => s.id === prev.id) || null;
         });
       } else {
-        // если документа ещё нет — создадим пустой
         docRef.set({ songs: [], updatedAt: serverTimestamp() }).catch(() => {});
       }
     }, (err) => {
       console.warn("Firestore listener error:", err);
     });
 
-    return () => unsub();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bandCode]);
+    return () => {
+      unsub();
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [bandCode, CORRECT_CODE]);
 
-  // Сохранение в облако + локально
-  const save = async (updatedSongs, updated = currentSong) => {
-    const normalized = ensureSongsStructure(updatedSongs);
-    setSongs(normalized);
-    localStorage.setItem("songs_final2", JSON.stringify(normalized));
-
-    if (bandCode === CORRECT_CODE) {
+  // ✅ Сохранение с debounce
+  const saveToCloud = useCallback(async (normalized) => {
+    if (bandCode === CORRECT_CODE && typeof db !== 'undefined') {
       try {
         await db.collection("bands").doc(bandCode).set({
           songs: normalized,
@@ -316,13 +368,20 @@ function App() {
         console.warn("Cloud save failed:", e);
       }
     }
+  }, [bandCode, CORRECT_CODE]);
+
+  const save = useCallback((updatedSongs, updated = currentSong) => {
+    const normalized = ensureSongsStructure(updatedSongs);
+    setSongs(normalized);
+    localStorage.setItem("songs_final2", JSON.stringify(normalized));
+    saveToCloud(normalized);
 
     if (updated) {
       setCurrentSong(normalized.find(s => s.id === updated.id));
     }
-  };
+  }, [currentSong, saveToCloud]);
 
-  const createSong = () => {
+  const createSong = useCallback(() => {
     if (!newSongName.trim()) return;
     const song = {
       id: Date.now(),
@@ -334,23 +393,34 @@ function App() {
     };
     save([...songs, song]);
     setNewSongName("");
-  };
+  }, [newSongName, songs, save]);
 
-  const selectSong = (song) => {
-    stop();
+  const selectSong = useCallback((song) => {
+    if (isPlaying) {
+      setIsPlaying(false);
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      if (visualRafRef.current) {
+        cancelAnimationFrame(visualRafRef.current);
+        visualRafRef.current = null;
+      }
+      visualQueueRef.current = [];
+    }
     setCurrentSong(song);
     setCurrentBeat(1);
     setCurrentBar(0);
     setCurrentPatternStep(0);
     setShowPatternEditor(false);
-  };
+  }, [isPlaying]);
 
-  const deleteSong = (id) => {
+  const deleteSong = useCallback((id) => {
     const updated = songs.filter(s => s.id !== id);
     save(updated, currentSong?.id === id ? null : currentSong);
-  };
+  }, [songs, currentSong, save]);
 
-  const addSection = () => {
+  const addSection = useCallback(() => {
     if (!currentSong) return;
 
     const updated = songs.map(s =>
@@ -366,9 +436,9 @@ function App() {
     save(updated);
     setShowAddForm(false);
     setNewSection({ name: "VERSE", bars: 4, comment: "" });
-  };
+  }, [currentSong, songs, newSection, save]);
 
-  const removeSection = (i) => {
+  const removeSection = useCallback((i) => {
     if (currentSong.sections[i].intro) return;
     const updated = songs.map(s =>
       s.id === currentSong.id
@@ -376,9 +446,9 @@ function App() {
         : s
     );
     save(updated);
-  };
+  }, [currentSong, songs, save]);
 
-  const togglePatternStep = (trackId, stepIdx) => {
+  const togglePatternStep = useCallback((trackId, stepIdx) => {
     if (!currentSong) return;
     const updated = songs.map(s => {
       if (s.id !== currentSong.id) return s;
@@ -397,9 +467,9 @@ function App() {
       return { ...s, pattern: updatedPattern };
     });
     save(updated);
-  };
+  }, [currentSong, songs, save]);
 
-  const clearPattern = () => {
+  const clearPattern = useCallback(() => {
     if (!currentSong) return;
     const updated = songs.map(s =>
       s.id === currentSong.id
@@ -407,13 +477,13 @@ function App() {
         : s
     );
     save(updated);
-  };
+  }, [currentSong, songs, save]);
 
   // ✅ Drag songs reorder
   const dragSongFrom = useRef(null);
   const allow = (e) => e.preventDefault();
-  const songDragStart = (i) => () => (dragSongFrom.current = i);
-  const songDrop = (to) => (e) => {
+  const songDragStart = useCallback((i) => () => (dragSongFrom.current = i), []);
+  const songDrop = useCallback((to) => (e) => {
     e.preventDefault();
     const from = dragSongFrom.current;
     if (from == null || from === to) return;
@@ -422,14 +492,15 @@ function App() {
     reordered.splice(to, 0, moved);
     save(reordered);
     dragSongFrom.current = null;
-  };
+  }, [songs, save]);
 
   // ✅ Drag sections reorder
   const dragFrom = useRef(null);
-  const sectionDragStart = (i) => () => {
+  const sectionDragStart = useCallback((i) => () => {
     if (!currentSong.sections[i].intro) dragFrom.current = i;
-  };
-  const sectionDrop = (to) => (e) => {
+  }, [currentSong]);
+  
+  const sectionDrop = useCallback((to) => (e) => {
     e.preventDefault();
     const from = dragFrom.current;
     if (from == null || to === from) return;
@@ -443,10 +514,21 @@ function App() {
     });
     save(updated);
     dragFrom.current = null;
-  };
+  }, [currentSong, songs, save]);
 
-  // AUDIO
-  const clickSound = (time, accent) => {
+  // ✅ AUDIO с unlocking для iOS
+  const unlockAudio = useCallback(async () => {
+    if (!audioContextRef.current) {
+      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (audioContextRef.current.state === 'suspended') {
+      await audioContextRef.current.resume();
+    }
+    setAudioUnlocked(true);
+  }, []);
+
+  const clickSound = useCallback((time, accent) => {
+    if (!audioContextRef.current) return;
     const osc = audioContextRef.current.createOscillator();
     const gain = audioContextRef.current.createGain();
     osc.connect(gain);
@@ -458,9 +540,9 @@ function App() {
     osc.start(time);
     gain.gain.exponentialRampToValueAtTime(0.001, time + 0.08);
     osc.stop(time + 0.08);
-  };
+  }, []);
 
-  const playInstrumentSound = (instrumentId, time) => {
+  const playInstrumentSound = useCallback((instrumentId, time) => {
     const ctx = audioContextRef.current;
     if (!ctx) return;
 
@@ -487,86 +569,92 @@ function App() {
     gain.gain.exponentialRampToValueAtTime(0.001, time + 0.12);
     osc.start(time);
     osc.stop(time + 0.12);
-  };
-// ФУНКЦИЯ ШЕДУЛЕР
- const schedule = () => {
-  const ct = audioContextRef.current.currentTime;
-  const lookahead = 0.1;
-  
-  while (nextNoteTimeRef.current < ct + lookahead) {
-    const scheduledTime = nextNoteTimeRef.current;
-    const currentBeatValue = beatRef.current;
-    const currentBarValue = barRef.current;
-    const pattern = currentSong?.pattern;
-    const patternLength = pattern?.steps || PATTERN_STEPS;
-    const totalBeatsPassed =
-      currentBarValue * beatsPerBar + (currentBeatValue - 1);
-    const usePatternSounds = pattern && patternHasActiveSteps(pattern);
+  }, [ensureSampleBuffer]);
 
-    if (usePatternSounds && patternLength > 0) {
-      const subDiv = 2;
-      const subDuration = (60 / bpm) / subDiv;
-      const baseStep = Math.floor(totalBeatsPassed * subDiv);
+  // ✅ SCHEDULER с проверкой isPlaying
+  const schedule = useCallback(() => {
+    if (!isPlayingRef.current || !currentSong) return;
+    
+    const ct = audioContextRef.current.currentTime;
+    const lookahead = 0.1;
+    
+    while (nextNoteTimeRef.current < ct + lookahead) {
+      const scheduledTime = nextNoteTimeRef.current;
+      const currentBeatValue = beatRef.current;
+      const currentBarValue = barRef.current;
+      const pattern = currentSong?.pattern;
+      const patternLength = pattern?.steps || PATTERN_STEPS;
+      const totalBeatsPassed =
+        currentBarValue * beatsPerBar + (currentBeatValue - 1);
+      const usePatternSounds = pattern && patternHasActiveSteps(pattern);
 
-      for (let sub = 0; sub < subDiv; sub++) {
-        const subTime = scheduledTime + sub * subDuration;
-        const stepIndex = (baseStep + sub) % patternLength;
+      if (usePatternSounds && patternLength > 0) {
+        const subDiv = 2;
+        const subDuration = (60 / bpm) / subDiv;
+        const baseStep = Math.floor(totalBeatsPassed * subDiv);
 
-        pattern.tracks.forEach(track => {
-          if (track.steps[stepIndex]) {
-            playInstrumentSound(track.id, subTime);
-          }
-        });
+        for (let sub = 0; sub < subDiv; sub++) {
+          const subTime = scheduledTime + sub * subDuration;
+          const stepIndex = (baseStep + sub) % patternLength;
 
+          pattern.tracks.forEach(track => {
+            if (track.steps[stepIndex]) {
+              playInstrumentSound(track.id, subTime);
+            }
+          });
+
+          visualQueueRef.current.push({
+            time: subTime,
+            type: "beat",
+            beat: currentBeatValue,
+            bar: currentBarValue,
+            patternStep: stepIndex,
+          });
+        }
+      } else {
         visualQueueRef.current.push({
-          time: subTime,
+          time: scheduledTime,
           type: "beat",
           beat: currentBeatValue,
           bar: currentBarValue,
-          patternStep: stepIndex,
+          patternStep: 0,
         });
+        clickSound(scheduledTime, currentBeatValue === 1);
       }
-    } else {
-      visualQueueRef.current.push({
-        time: scheduledTime,
-        type: "beat",
-        beat: currentBeatValue,
-        bar: currentBarValue,
-        patternStep: 0,
-      });
-      clickSound(scheduledTime, currentBeatValue === 1);
+
+      nextNoteTimeRef.current += 60 / bpm;
+
+      if (beatRef.current === beatsPerBar) {
+        beatRef.current = 1;
+        barRef.current += 1;
+        if (barRef.current >= totalBars(currentSong)) {
+          visualQueueRef.current.push({
+            time: scheduledTime + 0.001,
+            type: "stop",
+          });
+          return;
+        }
+      } else beatRef.current += 1;
     }
+    
+    if (isPlayingRef.current) {
+      timerRef.current = setTimeout(schedule, 25);
+    }
+  }, [currentSong, bpm, beatsPerBar, totalBars, clickSound, playInstrumentSound]);
 
-    nextNoteTimeRef.current += 60 / bpm;
-
-    if (beatRef.current === beatsPerBar) {
-      beatRef.current = 1;
-      barRef.current += 1;
-      if (barRef.current >= totalBars(currentSong)) {
-        visualQueueRef.current.push({
-          time: scheduledTime + 0.001,
-          type: "stop",
-        });
-        return;
-      }
-    } else beatRef.current += 1;
-  }
-  timerRef.current = setTimeout(schedule, 25);
-};
-// КОНЕЦ ШЕДУЛЕРА
-
-  //СТАРТ
-  const changeBpm = (delta) => {
+  const changeBpm = useCallback((delta) => {
     setBpm(prev => {
       const next = prev + delta;
       return Math.max(MIN_BPM, Math.min(MAX_BPM, next));
     });
-  };
+  }, []);
 
-  const start = async () => {
+  // ✅ START с unlocking и предзагрузкой
+  const start = useCallback(async () => {
     if (!currentSong) return;
-    if (!audioContextRef.current)
-      audioContextRef.current = new AudioContext();
+    
+    await unlockAudio();
+    
     try {
       await Promise.all(
         PATTERN_INSTRUMENTS.map(inst => ensureSampleBuffer(inst.id))
@@ -574,6 +662,7 @@ function App() {
     } catch (err) {
       console.warn("Sample warmup failed:", err);
     }
+    
     setIsPlaying(true);
     beatRef.current = 1;
     barRef.current = 0;
@@ -582,11 +671,17 @@ function App() {
     setCurrentPatternStep(0);
     visualQueueRef.current = [];
     nextNoteTimeRef.current = audioContextRef.current.currentTime;
-    schedule();
-  };
+    
+    // Отложенный старт шедулера
+    setTimeout(() => {
+      if (isPlayingRef.current) {
+        schedule();
+      }
+    }, 0);
+  }, [currentSong, unlockAudio, ensureSampleBuffer, schedule]);
 
-  //СТОП
-  const stop = () => {
+  // ✅ STOP
+  const stop = useCallback(() => {
     setIsPlaying(false);
     if (timerRef.current) {
       clearTimeout(timerRef.current);
@@ -598,8 +693,9 @@ function App() {
     }
     visualQueueRef.current = [];
     setCurrentPatternStep(0);
-  };
+  }, []);
 
+  // ✅ Visual updates
   useEffect(() => {
     if (!isPlaying) return;
 
@@ -651,22 +747,31 @@ function App() {
     };
   }, [isPlaying]);
 
-  useEffect(() => stop, []);
+  // ✅ Cleanup при размонтировании
+  useEffect(() => {
+    return () => {
+      stop();
+      if (audioContextRef.current?.state !== 'closed') {
+        audioContextRef.current?.close();
+      }
+    };
+  }, [stop]);
 
-  const ranges = currentSong
-    ? (() => {
-        let start = 0;
-        return currentSong.sections.map(sec => {
-          const end = start + sec.bars - 1;
-          const out = { start, end };
-          start = end + 1;
-          return out;
-        });
-      })()
-    : [];
+  // ✅ Мемоизация ranges
+  const ranges = useMemo(() => {
+    if (!currentSong) return [];
+    let start = 0;
+    return currentSong.sections.map(sec => {
+      const end = start + sec.bars - 1;
+      const out = { start, end };
+      start = end + 1;
+      return out;
+    });
+  }, [currentSong]);
 
-  const currentSectionIndex =
-    ranges.findIndex(r => currentBar >= r.start && currentBar <= r.end);
+  const currentSectionIndex = useMemo(() => 
+    ranges.findIndex(r => currentBar >= r.start && currentBar <= r.end)
+  , [ranges, currentBar]);
 
   useEffect(() => {
     if (isPlaying && currentSectionRef.current) {
@@ -699,7 +804,6 @@ function App() {
     );
   }
 
-  // Если код не введён или неверный — показываем форму
   if (bandCode !== CORRECT_CODE) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 text-white p-6 flex items-center justify-center">
@@ -712,13 +816,14 @@ function App() {
             placeholder="Код группы"
             value={bandCodeInput}
             onChange={(e) => setBandCodeInput(e.target.value)}
+            onKeyPress={(e) => e.key === 'Enter' && handleSubmitCode()}
             className="w-full p-3 rounded-xl bg-white/10 text-white mb-3 border border-white/20"
           />
           {codeError && <div className="text-red-300 text-sm mb-2">{codeError}</div>}
 
           <button
             onClick={handleSubmitCode}
-            className="w-full p-3 rounded-xl bg-green-600 font-bold"
+            className="w-full p-3 rounded-xl bg-green-600 font-bold min-h-[44px]"
           >
             Войти
           </button>
@@ -742,9 +847,10 @@ function App() {
               placeholder="Song name"
               value={newSongName}
               onChange={(e) => setNewSongName(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && createSong()}
               className="w-full p-3 rounded-xl bg-white/10 text-white mb-3"
             />
-            <button onClick={createSong} className="w-full p-3 rounded-xl bg-green-600 font-bold">➕ Add song</button>
+            <button onClick={createSong} className="w-full p-3 rounded-xl bg-green-600 font-bold min-h-[44px]">➕ Add song</button>
           </div>
 
           {songs.map((song, i) => (
@@ -756,11 +862,11 @@ function App() {
               onDragOver={allow}
               onDrop={songDrop(i)}
             >
-              <span className="cursor-grab select-none text-white/50">↕</span>
-              <button onClick={() => selectSong(song)} className="flex-1 p-3 bg-white/10 hover:bg-white/20 rounded-xl">
+              <span className="cursor-grab select-none text-white/50 flex items-center min-h-[44px]">↕</span>
+              <button onClick={() => selectSong(song)} className="flex-1 p-3 bg-white/10 hover:bg-white/20 rounded-xl min-h-[44px]">
                 🎵 {song.name}
               </button>
-              <button onClick={() => deleteSong(song.id)} className="p-3 bg-red-600 rounded-xl">🗑</button>
+              <button onClick={() => deleteSong(song.id)} className="p-3 bg-red-600 rounded-xl min-h-[44px] min-w-[44px]">🗑</button>
             </div>
           ))}
         </>
@@ -770,7 +876,7 @@ function App() {
         <div className="glass p-6 rounded-3xl w-full max-w-xl">
           <div className="flex justify-between mb-4">
             <h2 className="text-xl font-bold">{currentSong.name}</h2>
-            <button onClick={() => { setCurrentSong(null); stop(); }} className="px-3 py-2 bg-purple-600 rounded-lg">
+            <button onClick={() => { setCurrentSong(null); stop(); }} className="px-3 py-2 bg-purple-600 rounded-lg min-h-[44px]">
               ← Back
             </button>
           </div>
@@ -800,7 +906,7 @@ function App() {
                     <span className="font-bold">{sec.name}</span>
                     <span className="opacity-80">{sec.bars} bars</span>
                     {!isIntro && (
-                      <button onClick={() => removeSection(i)} className="ml-auto p-1 bg-red-600 rounded-lg">
+                      <button onClick={() => removeSection(i)} className="ml-auto p-1 bg-red-600 rounded-lg min-h-[44px] min-w-[44px]">
                         🗑
                       </button>
                     )}
@@ -810,47 +916,42 @@ function App() {
                     <div className="text-white/90 font-bold text-lg mt-2">{sec.comment}</div>
                   )}
 
-                 
-              {/* ✅ Визуал блоков */}
-              <div className="grid grid-cols-4 gap-1">
-                {Array.from({ length: sec.bars * 4 }).map((_, idx) => {
-                  const barNum = range.start + Math.floor(idx / 4);
-                  const localBeat = (idx % 4) + 1;
-                  const absClick = barNum * 4 + (localBeat - 1);
-                  const currentAbs = currentBar * 4 + currentBeat - 1;
-                  const isCurrent = absClick === currentAbs;
-                  const isFilled = absClick <= currentAbs;
-                  const isFirstBeat = localBeat === 1;
+                  <div className="grid grid-cols-4 gap-1">
+                    {Array.from({ length: sec.bars * 4 }).map((_, idx) => {
+                      const barNum = range.start + Math.floor(idx / 4);
+                      const localBeat = (idx % 4) + 1;
+                      const absClick = barNum * 4 + (localBeat - 1);
+                      const currentAbs = currentBar * 4 + currentBeat - 1;
+                      const isCurrent = absClick === currentAbs;
+                      const isFilled = absClick <= currentAbs;
+                      const isFirstBeat = localBeat === 1;
 
-                  return (
-                    <div
-                      key={idx}
-                      className={`
-                        h-5 rounded-md transition-all duration-100
-                        ${isFilled
-                          ? isCurrent
-                            ? 'bg-yellow-400/80 shadow-[0_0_10px_rgba(255,255,0,0.7)]'
-                            : 'bg-green-500/70'
-                          : isFirstBeat
-                            ? 'bg-white/30 border-2 border-white/50'
-                            : 'bg-white/15'
-                        }
-                      `}
-                    ></div>
-                  );
-                })}
-              </div>
-
-
+                      return (
+                        <div
+                          key={idx}
+                          className={`
+                            h-5 rounded-md transition-all duration-100
+                            ${isFilled
+                              ? isCurrent
+                                ? 'bg-yellow-400/80 shadow-[0_0_10px_rgba(255,255,0,0.7)]'
+                                : 'bg-green-500/70'
+                              : isFirstBeat
+                                ? 'bg-white/30 border-2 border-white/50'
+                                : 'bg-white/15'
+                            }
+                          `}
+                        ></div>
+                      );
+                    })}
+                  </div>
                 </div>
               );
             })}
 
-            {/* ✅ ADD SECTION FORM UNDER SECTIONS */}
             {!showAddForm ? (
               <button
                 onClick={() => setShowAddForm(true)}
-                className="w-full py-3 mt-2 bg-blue-500 rounded-lg font-bold"
+                className="w-full py-3 mt-2 bg-blue-500 rounded-lg font-bold min-h-[44px]"
               >
                 ➕ Add Section
               </button>
@@ -859,7 +960,7 @@ function App() {
                 <select
                   value={newSection.name}
                   onChange={(e) => setNewSection({ ...newSection, name: e.target.value })}
-                  className="w-full px-3 py-2 bg-white text-black rounded-lg"
+                  className="w-full px-3 py-2 bg-white text-black rounded-lg min-h-[44px]"
                 >
                   {sectionTypes.map(t => <option key={t}>{t}</option>)}
                 </select>
@@ -867,7 +968,7 @@ function App() {
                 <div className="flex items-center gap-3">
                   <button
                     type="button"
-                    className="px-3 py-2 bg-white/10 rounded-lg border border-white/20"
+                    className="px-3 py-2 bg-white/10 rounded-lg border border-white/20 min-h-[44px] min-w-[44px]"
                     onClick={() =>
                       setNewSection(prev => ({
                         ...prev,
@@ -881,12 +982,12 @@ function App() {
                     type="number"
                     value={newSection.bars}
                     onChange={(e) => setNewSection({ ...newSection, bars: Math.max(1, +e.target.value) })}
-                    className="flex-1 px-3 py-2 text-white bg-white/10 rounded-lg border border-white/20 text-center appearance-none focus:outline-none"
+                    className="flex-1 px-3 py-2 text-white bg-white/10 rounded-lg border border-white/20 text-center appearance-none focus:outline-none min-h-[44px]"
                     min={1}
                   />
                   <button
                     type="button"
-                    className="px-3 py-2 bg-white/10 rounded-lg border border-white/20"
+                    className="px-3 py-2 bg-white/10 rounded-lg border border-white/20 min-h-[44px] min-w-[44px]"
                     onClick={() =>
                       setNewSection(prev => ({
                         ...prev,
@@ -903,19 +1004,19 @@ function App() {
                   placeholder="Comment (optional)"
                   value={newSection.comment}
                   onChange={(e) => setNewSection({ ...newSection, comment: e.target.value })}
-                  className="w-full px-3 py-2 text-white bg-white/10 rounded-lg border border-white/20"
+                  className="w-full px-3 py-2 text-white bg-white/10 rounded-lg border border-white/20 min-h-[44px]"
                 />
 
                 <div className="flex gap-3">
                   <button
                     onClick={addSection}
-                    className="flex-1 py-2 bg-green-600 rounded-lg font-bold"
+                    className="flex-1 py-2 bg-green-600 rounded-lg font-bold min-h-[44px]"
                   >
                     ✔ Save Section
                   </button>
                   <button
                     onClick={() => setShowAddForm(false)}
-                    className="py-2 px-4 bg-gray-500 rounded-lg font-bold"
+                    className="py-2 px-4 bg-gray-500 rounded-lg font-bold min-h-[44px] min-w-[44px]"
                   >
                     ✖
                   </button>
@@ -936,25 +1037,25 @@ function App() {
           <div className="flex flex-col gap-2 mb-4">
             <div className="grid grid-cols-4 gap-2">
               <button
-                className="py-2 bg-white/10 rounded-lg border border-white/20"
+                className="py-2 bg-white/10 rounded-lg border border-white/20 min-h-[44px]"
                 onClick={() => changeBpm(-10)}
               >
                 −10
               </button>
               <button
-                className="py-2 bg-white/10 rounded-lg border border-white/20"
+                className="py-2 bg-white/10 rounded-lg border border-white/20 min-h-[44px]"
                 onClick={() => changeBpm(-1)}
               >
                 −1
               </button>
               <button
-                className="py-2 bg-white/10 rounded-lg border border-white/20"
+                className="py-2 bg-white/10 rounded-lg border border-white/20 min-h-[44px]"
                 onClick={() => changeBpm(1)}
               >
                 +1
               </button>
               <button
-                className="py-2 bg-white/10 rounded-lg border border-white/20"
+                className="py-2 bg-white/10 rounded-lg border border-white/20 min-h-[44px]"
                 onClick={() => changeBpm(10)}
               >
                 +10
@@ -963,14 +1064,19 @@ function App() {
             <button
               onClick={() => PatternEditorComponent && setShowPatternEditor(true)}
               disabled={!PatternEditorComponent}
-              className={`w-full py-2 rounded-lg font-bold transition ${
+              className={`w-full py-2 rounded-lg font-bold transition min-h-[44px] ${
                 PatternEditorComponent
                   ? "bg-purple-600 hover:bg-purple-500"
                   : "bg-white/10 cursor-not-allowed opacity-60"
               }`}
             >
-              Свой паттерн
+              {PatternEditorComponent ? "🎹 Свой паттерн" : "⏳ Загрузка редактора..."}
             </button>
+            {!PatternEditorComponent && (
+              <div className="text-xs text-center text-yellow-300">
+                💡 Если кнопка не активна - проверьте консоль (F12)
+              </div>
+            )}
           </div>
 
           <div className="h-24" />
@@ -981,11 +1087,11 @@ function App() {
         <div className="fixed bottom-0 left-0 right-0 z-50 bg-gradient-to-t from-indigo-900/80 via-blue-900/40 to-transparent">
           <div className="max-w-xl mx-auto px-6 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-3">
             {!isPlaying ? (
-              <button onClick={start} className="w-full py-4 bg-green-600 rounded-xl text-xl font-bold shadow-2xl">
+              <button onClick={start} className="w-full py-4 bg-green-600 rounded-xl text-xl font-bold shadow-2xl min-h-[44px]">
                 ▶ START
               </button>
             ) : (
-              <button onClick={stop} className="w-full py-4 bg-red-600 rounded-xl text-xl font-bold shadow-2xl">
+              <button onClick={stop} className="w-full py-4 bg-red-600 rounded-xl text-xl font-bold shadow-2xl min-h-[44px]">
                 ⏹ STOP
               </button>
             )}
@@ -995,6 +1101,14 @@ function App() {
 
       <style>{`
         .glass { background: rgba(255,255,255,0.05); backdrop-filter: blur(15px); }
+        input[type="number"]::-webkit-inner-spin-button,
+        input[type="number"]::-webkit-outer-spin-button {
+          -webkit-appearance: none;
+          margin: 0;
+        }
+        input[type="number"] {
+          -moz-appearance: textfield;
+        }
       `}</style>
     </div>
   );
