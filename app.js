@@ -1,7 +1,7 @@
 // ✅ OPTIMIZED & SECURE VERSION
 const { useState, useRef, useEffect, useCallback } = React;
 
-const APP_VERSION = "2024.12.23";
+const APP_VERSION = "2025.11.26";
 const VERSION_KEY = "app_version";
 const RELOAD_FLAG = "app_version_reloading";
 
@@ -14,10 +14,19 @@ const CONFIG = {
   MAX_COMMENT_LENGTH: 200,
   MIN_BPM: 40,
   MAX_BPM: 240,
+  DEFAULT_BPM: 120,
   BEATS_PER_BAR: 4,
   FIRESTORE_COLLECTION: "bands",
   SAVE_DEBOUNCE_MS: 1000,
   MAX_DOCUMENT_SIZE: 900000, // 900KB (Firestore limit 1MB)
+};
+
+const clampBpm = (value) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return CONFIG.DEFAULT_BPM;
+  }
+  return Math.min(CONFIG.MAX_BPM, Math.max(CONFIG.MIN_BPM, Math.round(numeric)));
 };
 
 const patternGlobals = window.MetronomePattern || {};
@@ -70,6 +79,7 @@ const normalizeSong = (song) => ({
   ...song,
   id: song?.id || Date.now(),
   name: sanitizeString(song?.name, CONFIG.MAX_SONG_NAME_LENGTH) || 'Untitled',
+  bpm: clampBpm(song?.bpm ?? CONFIG.DEFAULT_BPM),
   sections: (song?.sections || [])
     .slice(0, CONFIG.MAX_SECTIONS)
     .map(sec => ({
@@ -149,7 +159,7 @@ function App() {
   const [newSection, setNewSection] = useState({ name: "VERSE", bars: 4, comment: "" });
   const [showAddForm, setShowAddForm] = useState(false);
 
-  const [bpm, setBpm] = useState(120);
+  const [bpm, setBpm] = useState(CONFIG.DEFAULT_BPM);
   const [playbackState, setPlaybackState] = useState({ beat: 1, bar: 0, patternStep: 0 });
   const [isPlaying, setIsPlaying] = useState(false);
   const [showPatternEditor, setShowPatternEditor] = useState(false);
@@ -411,6 +421,7 @@ function App() {
     const song = {
       id: Date.now(),
       name: newSongName.trim(),
+      bpm: clampBpm(CONFIG.DEFAULT_BPM),
       sections: [{ name: "1 2 3 4", bars: 2, intro: true }],
       pattern: createEmptyPattern(),
     };
@@ -770,11 +781,20 @@ function App() {
     timerRef.current = setTimeout(schedule, 25);
   }, [bpm, currentSong, clickSound, playInstrumentSound]);
 
+  const updateSongBpm = useCallback((value) => {
+    if (!currentSong) return;
+    const clamped = clampBpm(value);
+    setBpm(clamped);
+    if (currentSong.bpm === clamped) return;
+
+    const updatedSongs = songs.map(s =>
+      s.id === currentSong.id ? { ...s, bpm: clamped } : s
+    );
+    save(updatedSongs, { ...currentSong, bpm: clamped });
+  }, [currentSong, songs, save]);
+
   const changeBpm = (delta) => {
-    setBpm(prev => {
-      const next = prev + delta;
-      return Math.max(CONFIG.MIN_BPM, Math.min(CONFIG.MAX_BPM, next));
-    });
+    updateSongBpm(bpm + delta);
   };
 
   const start = async () => {
@@ -907,6 +927,9 @@ function App() {
   useEffect(() => {
     if (!currentSong) {
       setShowPatternEditor(false);
+      setBpm(CONFIG.DEFAULT_BPM);
+    } else {
+      setBpm(clampBpm(currentSong.bpm ?? CONFIG.DEFAULT_BPM));
     }
   }, [currentSong]);
 
@@ -1215,7 +1238,7 @@ function App() {
             min={CONFIG.MIN_BPM}
             max={CONFIG.MAX_BPM}
             value={bpm}
-            onChange={(e) => setBpm(+e.target.value)}
+            onChange={(e) => updateSongBpm(+e.target.value)}
             className="w-full mb-2"
           />
           <div className="flex flex-col gap-2 mb-4">
