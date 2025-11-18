@@ -30,6 +30,7 @@ const clampBpm = (value) => {
 };
 
 const cloneSong = (song) => JSON.parse(JSON.stringify(song));
+const TOUCH_DRAG_DELAY_MS = 180;
 
 const patternGlobals = window.MetronomePattern || {};
 const SAMPLES_BASE = "sound/Real Drum Kit";
@@ -542,6 +543,7 @@ function App() {
 
   // ====== DRAG & DROP (Desktop + Mobile) ======
   const dragSongFrom = useRef(null);
+  const dragSongDelayTimeout = useRef(null);
   const touchStartY = useRef(null);
   const draggedElement = useRef(null);
   
@@ -562,13 +564,24 @@ function App() {
 
   // Mobile touch
   const songTouchStart = (i) => (e) => {
-    dragSongFrom.current = i;
-    touchStartY.current = e.touches[0].clientY;
-    draggedElement.current = e.currentTarget;
-    draggedElement.current.style.opacity = '0.5';
+    if (dragSongDelayTimeout.current) {
+      clearTimeout(dragSongDelayTimeout.current);
+    }
+    const touchY = e.touches[0].clientY;
+    const target = e.currentTarget;
+    dragSongDelayTimeout.current = setTimeout(() => {
+      dragSongFrom.current = i;
+      touchStartY.current = touchY;
+      draggedElement.current = target;
+      draggedElement.current.style.opacity = '0.5';
+    }, TOUCH_DRAG_DELAY_MS);
   };
 
   const songTouchMove = (e) => {
+    if (dragSongDelayTimeout.current) {
+      clearTimeout(dragSongDelayTimeout.current);
+      dragSongDelayTimeout.current = null;
+    }
     if (dragSongFrom.current == null) return;
     e.preventDefault();
     const touch = e.touches[0];
@@ -586,6 +599,10 @@ function App() {
   };
 
   const songTouchEnd = (e) => {
+    if (dragSongDelayTimeout.current) {
+      clearTimeout(dragSongDelayTimeout.current);
+      dragSongDelayTimeout.current = null;
+    }
     if (dragSongFrom.current == null) return;
     
     const touch = e.changedTouches[0];
