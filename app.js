@@ -1,7 +1,7 @@
 // ✅ OPTIMIZED & SECURE VERSION
 const { useState, useRef, useEffect, useCallback } = React;
 
-const APP_VERSION = "2025.11.26";
+const APP_VERSION = "2024.12.23";
 const VERSION_KEY = "app_version";
 const RELOAD_FLAG = "app_version_reloading";
 
@@ -28,6 +28,8 @@ const clampBpm = (value) => {
   }
   return Math.min(CONFIG.MAX_BPM, Math.max(CONFIG.MIN_BPM, Math.round(numeric)));
 };
+
+const cloneSong = (song) => JSON.parse(JSON.stringify(song));
 
 const patternGlobals = window.MetronomePattern || {};
 const SAMPLES_BASE = "sound/Real Drum Kit";
@@ -154,6 +156,8 @@ function App() {
   const [newSongName, setNewSongName] = useState("");
   const [syncError, setSyncError] = useState(null);
   const [pendingSave, setPendingSave] = useState(false);
+  const [editingSongId, setEditingSongId] = useState(null);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
 
   const sectionTypes = ["INTRO", "VERSE", "PRECHORUS", "CHORUS", "POSTCHORUS", "BRIDGE", "SOLO", "OUTRO", "PAUSE"];
   const [newSection, setNewSection] = useState({ name: "VERSE", bars: 4, comment: "" });
@@ -375,10 +379,6 @@ function App() {
           const normalized = ensureSongsStructure(data.songs);
           setSongs(normalized);
           localStorage.setItem("songs_final2", JSON.stringify(normalized));
-          setCurrentSong(prev => {
-            if (!prev) return prev;
-            return normalized.find(s => s.id === prev.id) || null;
-          });
           setSyncError(null);
         } else {
           // ✅ Initialize empty document
@@ -400,7 +400,7 @@ function App() {
   }, [bandCode, pendingSave]);
 
   // ✅ Save function with debouncing
-  const save = useCallback((updatedSongs, updated = currentSong) => {
+  const save = useCallback((updatedSongs) => {
     const normalized = ensureSongsStructure(updatedSongs);
     setSongs(normalized);
     localStorage.setItem("songs_final2", JSON.stringify(normalized));
@@ -409,11 +409,35 @@ function App() {
       setPendingSave(true);
       saveToFirestore(normalized);
     }
+  }, [bandCode, saveToFirestore]);
 
-    if (updated) {
-      setCurrentSong(normalized.find(s => s.id === updated.id));
-    }
-  }, [currentSong, bandCode, saveToFirestore]);
+  useEffect(() => {
+    if (!editingSongId || !currentSong || hasUnsavedChanges) return;
+    const latest = songs.find(s => s.id === editingSongId);
+    if (!latest) return;
+    const latestSerialized = JSON.stringify(latest);
+    const currentSerialized = JSON.stringify(currentSong);
+    if (latestSerialized === currentSerialized) return;
+    setCurrentSong(cloneSong(latest));
+  }, [songs, editingSongId, hasUnsavedChanges]);
+
+  const persistCurrentSong = useCallback(() => {
+    if (!currentSong) return;
+    const exists = songs.some(s => s.id === currentSong.id);
+    const updatedSongs = exists
+      ? songs.map(s => (s.id === currentSong.id ? currentSong : s))
+      : [...songs, currentSong];
+    save(updatedSongs);
+    setHasUnsavedChanges(false);
+  }, [currentSong, songs, save]);
+
+  const confirmSaveBeforeExit = useCallback(() => {
+    if (!hasUnsavedChanges) return true;
+    const shouldSave = window.confirm("Сохранить изменения? OK = Save, Cancel = Cancel.");
+    if (!shouldSave) return false;
+    persistCurrentSong();
+    return true;
+  }, [hasUnsavedChanges, persistCurrentSong]);
 
   // ====== SONG OPERATIONS ======
   const createSong = () => {
@@ -431,7 +455,9 @@ function App() {
 
   const selectSong = (song) => {
     stop();
-    setCurrentSong(song);
+    setEditingSongId(song.id);
+    setHasUnsavedChanges(false);
+    setCurrentSong(cloneSong(song));
     setPlaybackState({ beat: 1, bar: 0, patternStep: 0 });
     setShowPatternEditor(false);
   };
@@ -447,65 +473,71 @@ function App() {
     if (!confirmed) return;
     
     const updated = songs.filter(s => s.id !== id);
-    save(updated, currentSong?.id === id ? null : currentSong);
+    save(updated);
+    if (currentSong?.id === id) {
+      setCurrentSong(null);
+      setEditingSongId(null);
+      setHasUnsavedChanges(false);
+      stop();
+    }
   };
 
   const addSection = () => {
     if (!currentSong) return;
-    const updated = songs.map(s =>
-      s.id === currentSong.id
-        ? { 
-            ...s, 
-            sections: [...s.sections, 
-              { ...newSection, bars: Math.max(1, newSection.bars), intro: false }
-            ] 
-          }
-        : s
-    );
-    save(updated);
+    const section = {
+      ...newSection,
+      bars: Math.max(1, newSection.bars),
+      intro: false,
+    };
+    setCurrentSong(prev => {
+      if (!prev) return prev;
+      return { ...prev, sections: [...prev.sections, section] };
+    });
+    setHasUnsavedChanges(true);
     setShowAddForm(false);
     setNewSection({ name: "VERSE", bars: 4, comment: "" });
   };
 
   const removeSection = (i) => {
     if (!currentSong || currentSong.sections[i].intro) return;
-    const updated = songs.map(s =>
-      s.id === currentSong.id
-        ? { ...s, sections: s.sections.filter((_, idx) => idx !== i) }
-        : s
-    );
-    save(updated);
+    setCurrentSong(prev => {
+      if (!prev) return prev;
+      return { ...prev, sections: prev.sections.filter((_, idx) => idx !== i) };
+    });
+    setHasUnsavedChanges(true);
   };
 
   const togglePatternStep = useCallback((trackId, stepIdx) => {
-    if (!currentSong) return;
-    const updated = songs.map(s => {
-      if (s.id !== currentSong.id) return s;
-      const updatedPattern = {
-        ...s.pattern,
-        tracks: s.pattern.tracks.map(track => {
-          if (track.id !== trackId) return track;
-          return {
-            ...track,
-            steps: track.steps.map((value, idx) =>
-              idx === stepIdx ? !value : value
-            ),
-          };
-        }),
+    setCurrentSong(prev => {
+      if (!prev) return prev;
+      let changed = false;
+      const updatedTracks = prev.pattern.tracks.map(track => {
+        if (track.id !== trackId) return track;
+        const steps = track.steps.map((value, idx) => {
+          if (idx !== stepIdx) return value;
+          changed = true;
+          return !value;
+        });
+        return { ...track, steps };
+      });
+      if (!changed) return prev;
+      setHasUnsavedChanges(true);
+      return {
+        ...prev,
+        pattern: {
+          ...prev.pattern,
+          tracks: updatedTracks,
+        },
       };
-      return { ...s, pattern: updatedPattern };
     });
-    save(updated);
-  }, [currentSong, songs, save]);
+  }, []);
 
   const clearPattern = () => {
-    if (!currentSong) return;
-    const updated = songs.map(s =>
-      s.id === currentSong.id
-        ? { ...s, pattern: createEmptyPattern() }
-        : s
-    );
-    save(updated);
+    setCurrentSong(prev => {
+      if (!prev) return prev;
+      setHasUnsavedChanges(true);
+      return { ...prev, pattern: createEmptyPattern() };
+    });
   };
 
   // ====== DRAG & DROP (Desktop + Mobile) ======
@@ -591,28 +623,30 @@ function App() {
   const draggedSection = useRef(null);
 
   const sectionDragStart = (i) => () => {
-    if (!currentSong.sections[i].intro) dragFrom.current = i;
+    if (currentSong && !currentSong.sections[i].intro) {
+      dragFrom.current = i;
+    }
   };
   
   const sectionDrop = (to) => (e) => {
     e.preventDefault();
     const from = dragFrom.current;
     if (from == null || to === from) return;
-    if (currentSong.sections[to].intro) return;
-    const updated = songs.map(s => {
-      if (s.id !== currentSong.id) return s;
-      const arr = [...s.sections];
+    setCurrentSong(prev => {
+      if (!prev) return prev;
+      if (prev.sections[to]?.intro) return prev;
+      const arr = [...prev.sections];
       const [moved] = arr.splice(from, 1);
       arr.splice(to, 0, moved);
-      return { ...s, sections: arr };
+      setHasUnsavedChanges(true);
+      return { ...prev, sections: arr };
     });
-    save(updated);
     dragFrom.current = null;
   };
 
   // Mobile touch for sections
   const sectionTouchStart = (i) => (e) => {
-    if (currentSong.sections[i].intro) return;
+    if (!currentSong || currentSong.sections[i].intro) return;
     dragFrom.current = i;
     sectionTouchStartY.current = e.touches[0].clientY;
     draggedSection.current = e.currentTarget;
@@ -627,7 +661,7 @@ function App() {
     
     const sectionItems = document.querySelectorAll('[data-section-index]');
     sectionItems.forEach((item, idx) => {
-      const isIntro = currentSong.sections[idx]?.intro;
+      const isIntro = currentSong?.sections[idx]?.intro;
       if (item.contains(element) && idx !== dragFrom.current && !isIntro) {
         item.style.borderTop = '3px solid #60a5fa';
       } else {
@@ -646,20 +680,20 @@ function App() {
     let dropIndex = null;
     sectionItems.forEach((item, idx) => {
       item.style.borderTop = '';
-      if (item.contains(element) && !currentSong.sections[idx]?.intro) {
+      if (item.contains(element) && !currentSong?.sections[idx]?.intro) {
         dropIndex = idx;
       }
     });
 
     if (dropIndex != null && dropIndex !== dragFrom.current) {
-      const updated = songs.map(s => {
-        if (s.id !== currentSong.id) return s;
-        const arr = [...s.sections];
+      setCurrentSong(prev => {
+        if (!prev) return prev;
+        const arr = [...prev.sections];
         const [moved] = arr.splice(dragFrom.current, 1);
         arr.splice(dropIndex, 0, moved);
-        return { ...s, sections: arr };
+        setHasUnsavedChanges(true);
+        return { ...prev, sections: arr };
       });
-      save(updated);
     }
 
     if (draggedSection.current) {
@@ -782,16 +816,14 @@ function App() {
   }, [bpm, currentSong, clickSound, playInstrumentSound]);
 
   const updateSongBpm = useCallback((value) => {
-    if (!currentSong) return;
     const clamped = clampBpm(value);
     setBpm(clamped);
-    if (currentSong.bpm === clamped) return;
-
-    const updatedSongs = songs.map(s =>
-      s.id === currentSong.id ? { ...s, bpm: clamped } : s
-    );
-    save(updatedSongs, { ...currentSong, bpm: clamped });
-  }, [currentSong, songs, save]);
+    setCurrentSong(prev => {
+      if (!prev || prev.bpm === clamped) return prev;
+      setHasUnsavedChanges(true);
+      return { ...prev, bpm: clamped };
+    });
+  }, []);
 
   const changeBpm = (delta) => {
     updateSongBpm(bpm + delta);
@@ -831,6 +863,15 @@ function App() {
     visualQueueRef.current = [];
     setPlaybackState({ beat: 1, bar: 0, patternStep: 0 });
   }, []);
+
+  const handleBack = () => {
+    if (!currentSong) return;
+    if (!confirmSaveBeforeExit()) return;
+    stop();
+    setCurrentSong(null);
+    setEditingSongId(null);
+    setHasUnsavedChanges(false);
+  };
 
   // ✅ Visual update loop (optimized - single state update)
   useEffect(() => {
@@ -1069,7 +1110,7 @@ function App() {
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-xl font-bold truncate flex-1">{currentSong.name}</h2>
             <button 
-              onClick={() => { setCurrentSong(null); stop(); }} 
+              onClick={handleBack} 
               className="px-4 py-2 bg-purple-600 hover:bg-purple-500 rounded-lg transition ml-3"
             >
               ← Back
