@@ -163,6 +163,8 @@ function App() {
   const sectionTypes = ["INTRO", "VERSE", "PRECHORUS", "CHORUS", "POSTCHORUS", "BRIDGE", "SOLO", "OUTRO", "PAUSE"];
   const [newSection, setNewSection] = useState({ name: "VERSE", bars: 4, comment: "" });
   const [showAddForm, setShowAddForm] = useState(false);
+  const [editingSectionIndex, setEditingSectionIndex] = useState(null);
+  const [editSectionData, setEditSectionData] = useState({ name: "VERSE", bars: 4, comment: "" });
 
   const [bpm, setBpm] = useState(CONFIG.DEFAULT_BPM);
   const [playbackState, setPlaybackState] = useState({ beat: 1, bar: 0, patternStep: 0 });
@@ -459,6 +461,8 @@ function App() {
     setEditingSongId(song.id);
     setHasUnsavedChanges(false);
     setCurrentSong(cloneSong(song));
+    setEditingSectionIndex(null);
+    setEditSectionData({ name: "VERSE", bars: 4, comment: "" });
     setPlaybackState({ beat: 1, bar: 0, patternStep: 0 });
     setShowPatternEditor(false);
   };
@@ -479,6 +483,7 @@ function App() {
       setCurrentSong(null);
       setEditingSongId(null);
       setHasUnsavedChanges(false);
+      setEditingSectionIndex(null);
       stop();
     }
   };
@@ -497,6 +502,7 @@ function App() {
     setHasUnsavedChanges(true);
     setShowAddForm(false);
     setNewSection({ name: "VERSE", bars: 4, comment: "" });
+    setEditingSectionIndex(null);
   };
 
   const removeSection = (i) => {
@@ -506,6 +512,45 @@ function App() {
       return { ...prev, sections: prev.sections.filter((_, idx) => idx !== i) };
     });
     setHasUnsavedChanges(true);
+    if (editingSectionIndex === i) {
+      setEditingSectionIndex(null);
+      setEditSectionData({ name: "VERSE", bars: 4, comment: "" });
+    }
+  };
+
+  const startSectionEdit = (i) => {
+    if (!currentSong) return;
+    const sec = currentSong.sections[i];
+    setEditingSectionIndex(i);
+    setEditSectionData({
+      name: sec.name || "VERSE",
+      bars: sec.bars || 1,
+      comment: sec.comment || "",
+    });
+    setShowAddForm(false);
+  };
+
+  const cancelSectionEdit = () => {
+    setEditingSectionIndex(null);
+    setEditSectionData({ name: "VERSE", bars: 4, comment: "" });
+  };
+
+  const saveSectionEdit = () => {
+    if (editingSectionIndex == null || !currentSong) return;
+    const sanitized = {
+      ...currentSong.sections[editingSectionIndex],
+      ...editSectionData,
+      bars: Math.max(1, editSectionData.bars || 1),
+    };
+    setCurrentSong(prev => {
+      if (!prev) return prev;
+      const sections = prev.sections.map((sec, idx) =>
+        idx === editingSectionIndex ? sanitized : sec
+      );
+      return { ...prev, sections };
+    });
+    setHasUnsavedChanges(true);
+    cancelSectionEdit();
   };
 
   const togglePatternStep = useCallback((trackId, stepIdx) => {
@@ -769,6 +814,8 @@ function App() {
   const schedule = useCallback(() => {
     const ct = audioContextRef.current.currentTime;
     const lookahead = 0.1;
+    const songTotalBars = currentSong ? totalBars(currentSong) : 0;
+    const loopIndefinitely = currentSong ? !currentSong.sections.some(sec => !sec.intro) : false;
     
     while (nextNoteTimeRef.current < ct + lookahead) {
       const scheduledTime = nextNoteTimeRef.current;
@@ -818,12 +865,16 @@ function App() {
       if (beatRef.current === CONFIG.BEATS_PER_BAR) {
         beatRef.current = 1;
         barRef.current += 1;
-        if (barRef.current >= totalBars(currentSong)) {
-          visualQueueRef.current.push({
-            time: scheduledTime + 0.001,
-            type: "stop",
-          });
-          return;
+        if (songTotalBars > 0 && barRef.current >= songTotalBars) {
+          if (loopIndefinitely) {
+            barRef.current = 0;
+          } else {
+            visualQueueRef.current.push({
+              time: scheduledTime + 0.001,
+              type: "stop",
+            });
+            return;
+          }
         }
       } else {
         beatRef.current += 1;
@@ -888,6 +939,8 @@ function App() {
     setCurrentSong(null);
     setEditingSongId(null);
     setHasUnsavedChanges(false);
+    setEditingSectionIndex(null);
+    setEditSectionData({ name: "VERSE", bars: 4, comment: "" });
   };
 
   // ✅ Visual update loop (optimized - single state update)
@@ -985,6 +1038,8 @@ function App() {
   useEffect(() => {
     if (!currentSong) {
       setShowPatternEditor(false);
+      setEditingSectionIndex(null);
+      setEditSectionData({ name: "VERSE", bars: 4, comment: "" });
       setBpm(CONFIG.DEFAULT_BPM);
     } else {
       setBpm(clampBpm(currentSong.bpm ?? CONFIG.DEFAULT_BPM));
@@ -1163,12 +1218,20 @@ function App() {
                     <span className="font-bold">{sec.name}</span>
                     <span className="opacity-80 text-sm">{sec.bars} bars</span>
                     {!isIntro && (
-                      <button 
-                        onClick={() => removeSection(i)} 
-                        className="ml-auto p-1 px-2 bg-red-600 hover:bg-red-500 rounded-lg transition text-sm"
-                      >
-                        🗑
-                      </button>
+                      <div className="ml-auto flex gap-2">
+                        <button 
+                          onClick={() => startSectionEdit(i)} 
+                          className="p-1 px-2 bg-blue-600 hover:bg-blue-500 rounded-lg transition text-sm"
+                        >
+                          ✏️
+                        </button>
+                        <button 
+                          onClick={() => removeSection(i)} 
+                          className="p-1 px-2 bg-red-600 hover:bg-red-500 rounded-lg transition text-sm"
+                        >
+                          🗑
+                        </button>
+                      </div>
                     )}
                   </div>
 
@@ -1204,13 +1267,88 @@ function App() {
                       );
                     })}
                   </div>
+
+                  {editingSectionIndex === i && (
+                    <div className="mt-4 p-3 rounded-xl bg-white/10 border border-white/20 space-y-3">
+                      <div className="text-sm opacity-80">Редактирование этой секции</div>
+                      <select
+                        value={editSectionData.name}
+                        onChange={(e) => setEditSectionData(prev => ({ ...prev, name: e.target.value }))}
+                        className="w-full px-3 py-2 bg-white text-black rounded-lg focus:outline-none"
+                      >
+                        {sectionTypes.map(t => <option key={t}>{t}</option>)}
+                      </select>
+
+                      <div className="flex items-center gap-3">
+                        <button
+                          type="button"
+                          className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-lg border border-white/20 transition"
+                          onClick={() =>
+                            setEditSectionData(prev => ({
+                              ...prev,
+                              bars: Math.max(1, (prev.bars || 1) - 1),
+                            }))
+                          }
+                        >
+                          −
+                        </button>
+                        <input
+                          type="number"
+                          value={editSectionData.bars}
+                          onChange={(e) => setEditSectionData(prev => ({ ...prev, bars: Math.max(1, +e.target.value) }))}
+                          className="flex-1 px-3 py-2 text-white bg-white/10 rounded-lg border border-white/20 text-center appearance-none focus:outline-none focus:border-white/40 transition"
+                          min={1}
+                          max={16}
+                        />
+                        <button
+                          type="button"
+                          className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-lg border border-white/20 transition"
+                          onClick={() =>
+                            setEditSectionData(prev => ({
+                              ...prev,
+                              bars: Math.min(16, (prev.bars || 1) + 1),
+                            }))
+                          }
+                        >
+                          +
+                        </button>
+                      </div>
+
+                      <input
+                        type="text"
+                        placeholder="Comment (optional)"
+                        value={editSectionData.comment}
+                        onChange={(e) => setEditSectionData(prev => ({ ...prev, comment: e.target.value }))}
+                        maxLength={CONFIG.MAX_COMMENT_LENGTH}
+                        className="w-full px-3 py-2 text-white bg-white/10 rounded-lg border border-white/20 focus:outline-none focus:border-white/40 transition"
+                      />
+
+                      <div className="flex gap-3">
+                        <button
+                          onClick={saveSectionEdit}
+                          className="flex-1 py-2 bg-green-600 hover:bg-green-500 rounded-lg font-bold transition"
+                        >
+                          💾 Save Changes
+                        </button>
+                        <button
+                          onClick={cancelSectionEdit}
+                          className="py-2 px-4 bg-gray-500 hover:bg-gray-400 rounded-lg font-bold transition"
+                        >
+                          ✖
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}
 
             {!showAddForm ? (
               <button
-                onClick={() => setShowAddForm(true)}
+                onClick={() => {
+                  cancelSectionEdit();
+                  setShowAddForm(true);
+                }}
                 className="w-full py-3 mt-2 bg-blue-500 hover:bg-blue-400 rounded-lg font-bold transition"
               >
                 ➕ Add Section
@@ -1288,6 +1426,7 @@ function App() {
                 </div>
               </div>
             )}
+
           </div>
 
           <label className="block opacity-80 mb-1">Tempo: {bpm} BPM</label>
