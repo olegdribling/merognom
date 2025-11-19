@@ -1,7 +1,7 @@
 // ✅ OPTIMIZED & SECURE VERSION
 const { useState, useRef, useEffect, useCallback } = React;
 
-const APP_VERSION = "2024.12.23";
+const APP_VERSION = "2025.11.20";
 const VERSION_KEY = "app_version";
 const RELOAD_FLAG = "app_version_reloading";
 
