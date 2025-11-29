@@ -1239,7 +1239,7 @@ function App() {
                     <div className="text-white/90 font-bold text-lg mt-2 mb-2">{sec.comment}</div>
                   )}
 
-                  <div className="grid grid-cols-4 gap-1">
+                  <div className="grid grid-cols-8 gap-1">
                     {Array.from({ length: sec.bars * 4 }).map((_, idx) => {
                       const barNum = range.start + Math.floor(idx / 4);
                       const localBeat = (idx % 4) + 1;
