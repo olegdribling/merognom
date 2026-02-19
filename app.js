@@ -1,13 +1,13 @@
 // ✅ OPTIMIZED & SECURE VERSION
 const { useState, useRef, useEffect, useCallback } = React;
 
-const APP_VERSION = "2025.11.20";
+const APP_VERSION = "2026.02.19";
 const VERSION_KEY = "app_version";
 const RELOAD_FLAG = "app_version_reloading";
 
 // ✅ Configuration
 const CONFIG = {
-  CORRECT_CODE: "0000",
+  CORRECT_CODE: "1234",
   MAX_SONGS: 50,
   MAX_SECTIONS: 20,
   MAX_SONG_NAME_LENGTH: 100,
